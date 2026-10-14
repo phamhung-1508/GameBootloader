@@ -8,7 +8,40 @@ import ctypes
 from ctypes import wintypes
 import psutil
 
-# 1. Kiểm tra và tự nâng quyền Administrator an toàn
+# ==========================================================
+#       1. CƠ CHẾ ĐƠN THỰC THỂ (CHỐNG MỞ 2 APP TRÙNG LẶP)
+# ==========================================================
+MUTEX_NAME = "Global\\Mir4_Master_Hub_SingleInstance_PhamHung"
+kernel32 = ctypes.windll.kernel32
+user32 = ctypes.windll.user32
+
+mutex = kernel32.CreateMutexW(None, False, MUTEX_NAME)
+last_error = kernel32.GetLastError()
+ERROR_ALREADY_EXISTS = 183
+
+if last_error == ERROR_ALREADY_EXISTS:
+    # Nếu đã có app đang chạy, tìm và đưa cửa sổ đó lên trên rồi thoát
+    def bring_existing_to_front():
+        def enum_cb(hwnd, extra):
+            if win32gui.IsWindowVisible(hwnd):
+                title = win32gui.GetWindowText(hwnd)
+                if "Mir4 Master Hub" in title and "[PHAMHUNG]" in title:
+                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                    win32gui.SetForegroundWindow(hwnd)
+                    return False
+            return True
+        try:
+            import win32gui
+            import win32con
+            win32gui.EnumWindows(enum_cb, None)
+        except Exception:
+            pass
+    bring_existing_to_front()
+    sys.exit(0)
+
+# ==========================================================
+#       2. TỰ ĐỘNG NÂNG QUYỀN ADMINISTRATOR AN TOÀN
+# ==========================================================
 def is_admin():
     try:
         return ctypes.windll.shell32.IsUserAnAdmin() != 0
@@ -30,7 +63,9 @@ if not is_admin():
     except Exception:
         pass
 
-# 2. Thư viện đồ họa Windows
+# ==========================================================
+#       3. THƯ VIỆN ĐỒ HỌA & ẨN CONSOLE ĐEN
+# ==========================================================
 import win32gui
 import win32ui
 import win32con
@@ -52,7 +87,6 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QTimer, QRect, QPoint
 from PyQt5.QtGui import QImage, QPixmap, QPainter, QIcon
 
-# Xác định đường dẫn file cấu hình luôn nằm cạnh file .exe thực tế
 def get_app_dir():
     if getattr(sys, 'frozen', False):
         return os.path.dirname(sys.executable)
@@ -90,7 +124,7 @@ def is_process_running_by_path(target_path):
 
 
 # ==========================================================
-#                   MODULE MIR4 WALL MANAGER
+#       4. MODULE MIR4 WALL MANAGER (TỐI ƯU NHẸ CPU)
 # ==========================================================
 
 def capture_window_pixmap(hwnd, target_w, target_h):
@@ -205,7 +239,7 @@ class ThumbnailCard(QFrame):
 
 
 # ==========================================================
-#                   CỬA SỔ CHÍNH TỔNG HỢP (MASTER APP)
+#                   CỬA SỔ CHÍNH MASTER APP
 # ==========================================================
 
 class MasterApp(QMainWindow):
@@ -235,7 +269,6 @@ class MasterApp(QMainWindow):
         if os.path.exists("app_icon.ico"):
             self.setWindowIcon(QIcon("app_icon.ico"))
 
-        # Cấu hình QT & Tinker
         self.config = {
             "qt_path": "",
             "tinker_path": "",
@@ -245,38 +278,35 @@ class MasterApp(QMainWindow):
         }
         self.load_config()
 
-        # Biến điều khiển Wall Manager
         self.current_cols = 4
         self.cards = {}
         self.auto_scale = True
         self.fixed_w = 320
         self.fixed_h = 180
+        self.current_fps = 30
 
         self.init_ui()
 
-        # Timer cập nhật khung hình cho Wall
+        # Timer cập nhật khung hình
         self.render_timer = QTimer(self)
         self.render_timer.timeout.connect(self.update_frames)
-        self.render_timer.start(33)
 
-        # Timer quét phát hiện game mới mở/đóng
+        # Timer quét phát hiện game mới mở/đóng (5 giây/lần)
         self.scan_timer = QTimer(self)
         self.scan_timer.timeout.connect(self.scan_windows)
-        self.scan_timer.start(3000)
+        self.scan_timer.start(5000)
 
-        # Timer Watchdog cho QT & TINKER (quét mỗi 4 giây)
+        # Timer Watchdog cho QT & TINKER (6 giây/lần để tiết kiệm tối đa CPU)
         self.watchdog_timer = QTimer(self)
         self.watchdog_timer.timeout.connect(self.check_and_recover_apps)
-        self.watchdog_timer.start(4000)
+        self.watchdog_timer.start(6000)
 
         # Khởi chạy ban đầu
         QTimer.singleShot(200, self.check_app_status_ui)
-        QTimer.singleShot(500, self.scan_windows)
 
-        # Tự khởi chạy QT & TINKER khi mở app
         if self.config.get("auto_start_apps", True):
             delay_ms = self.config.get("delay_seconds", 2) * 1000
-            self.status_boot_label.setText(f"Tự động chạy QT & TINKER sau {self.config.get('delay_seconds', 2)}s...")
+            self.status_boot_label.setText(f"Tự động chạy QT sau {self.config.get('delay_seconds', 2)}s...")
             QTimer.singleShot(delay_ms, self.auto_start_both_silent)
 
     def init_ui(self):
@@ -287,6 +317,7 @@ class MasterApp(QMainWindow):
         main_layout.setSpacing(8)
 
         self.tabs = QTabWidget()
+        self.tabs.currentChanged.connect(self.on_tab_changed)
 
         # ================= TAB 1: QUẢN LÝ AUTO (QT & TINKER) =================
         tab_boot = QWidget()
@@ -333,7 +364,7 @@ class MasterApp(QMainWindow):
 
         # 2. TINKER
         h_tinker_title = QHBoxLayout()
-        lbl_tinker = QLabel("2. Phần mềm TINKER:")
+        lbl_tinker = QLabel("2. Phần mềm TINKER (Bật sau QT 30s):")
         lbl_tinker.setStyleSheet("border: none; font-weight: bold; color: #00e676; font-size: 14px;")
         h_tinker_title.addWidget(lbl_tinker)
         self.status_tinker_badge = QLabel("⚪ Đang kiểm tra...")
@@ -364,7 +395,6 @@ class MasterApp(QMainWindow):
 
         tab_boot_layout.addWidget(boot_box)
 
-        # Tùy chọn khởi chạy & Watchdog
         opts_layout = QVBoxLayout()
         opts_layout.setSpacing(8)
 
@@ -375,7 +405,7 @@ class MasterApp(QMainWindow):
         self.chk_windows_startup.stateChanged.connect(self.toggle_startup)
         h_opts1.addWidget(self.chk_windows_startup)
 
-        self.chk_auto_launch_tools = QCheckBox("Tự bật 2 Tool khi mở App")
+        self.chk_auto_launch_tools = QCheckBox("Tự bật QT & TINKER khi mở App (QT trước 30s)")
         self.chk_auto_launch_tools.setChecked(self.config.get("auto_start_apps", True))
         self.chk_auto_launch_tools.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 13px;")
         self.chk_auto_launch_tools.stateChanged.connect(self.save_settings)
@@ -390,8 +420,7 @@ class MasterApp(QMainWindow):
 
         tab_boot_layout.addLayout(opts_layout)
 
-        # Nút khởi chạy cả 2 tool
-        self.btn_launch_both = QPushButton("🚀 KHỞI CHẠY CẢ 2 PHẦN MỀM (QT & TINKER)")
+        self.btn_launch_both = QPushButton("🚀 KHỞI CHẠY QT VÀ TINKER (CÁCH NHAU 30S)")
         self.btn_launch_both.setFixedHeight(45)
         self.btn_launch_both.setStyleSheet("""
             QPushButton {
@@ -403,13 +432,12 @@ class MasterApp(QMainWindow):
         self.btn_launch_both.clicked.connect(self.on_manual_launch_both)
         tab_boot_layout.addWidget(self.btn_launch_both)
 
-        self.status_boot_label = QLabel("Hệ thống giám sát đang chạy ngầm.")
+        self.status_boot_label = QLabel("Hệ thống giám sát đang chạy ngầm (Chế độ tiết kiệm CPU).")
         self.status_boot_label.setAlignment(Qt.AlignCenter)
         self.status_boot_label.setStyleSheet("color: #00e676; font-size: 13px; font-weight: bold;")
         tab_boot_layout.addWidget(self.status_boot_label)
 
         tab_boot_layout.addStretch()
-
         self.tabs.addTab(tab_boot, "⚙️ QUẢN LÝ AUTO (QT & TINKER)")
 
         # ================= TAB 2: BỨC TƯỜNG GAME =================
@@ -550,9 +578,32 @@ class MasterApp(QMainWindow):
         ad_layout.addWidget(gold_badge)
         main_layout.addWidget(self.ad_banner)
 
+    # ================= LOGIC TIẾT KIỆM TÀI NGUYÊN (CPU OPTIMIZER) =================
+
+    def on_tab_changed(self, index):
+        """Khi ở Tab 1 (Auto) thì DỪNG vẽ Wall để CPU về 0%. Sang Tab 2 mới bật lại."""
+        if index == 1:
+            if self.current_fps > 0 and not self.render_timer.isActive():
+                interval = max(16, int(1000 / self.current_fps))
+                self.render_timer.start(interval)
+            self.scan_windows()
+        else:
+            self.render_timer.stop()
+
+    def changeEvent(self, event):
+        """Khi thu nhỏ (Minimize) xuống Taskbar thì dừng vẽ để tối ưu máy"""
+        super().changeEvent(event)
+        if self.isMinimized():
+            self.render_timer.stop()
+        elif self.isVisible() and self.tabs.currentIndex() == 1 and self.current_fps > 0:
+            if not self.render_timer.isActive():
+                interval = max(16, int(1000 / self.current_fps))
+                self.render_timer.start(interval)
+
     # ================= LOGIC MIR4 WALL MANAGER =================
 
     def on_fps_slider_changed(self, value):
+        self.current_fps = value
         if value == 0:
             self.fps_value_label.setText("0 FPS (Tạm dừng)")
             self.render_timer.stop()
@@ -560,7 +611,7 @@ class MasterApp(QMainWindow):
             self.fps_value_label.setText(f"{value} FPS")
             interval = max(16, int(1000 / value))
             self.render_timer.setInterval(interval)
-            if not self.render_timer.isActive():
+            if self.tabs.currentIndex() == 1 and not self.render_timer.isActive():
                 self.render_timer.start()
 
     def on_resolution_change(self):
@@ -609,6 +660,9 @@ class MasterApp(QMainWindow):
         self.update_card_dimensions()
 
     def scan_windows(self):
+        if self.tabs.currentIndex() != 1:
+            return
+
         found_windows = []
         pattern = re.compile(r"^mir4g\[(\d+)\]", re.IGNORECASE)
 
@@ -681,7 +735,6 @@ class MasterApp(QMainWindow):
             self, "Chọn file chương trình", "", "Executable Files (*.exe *.bat *.py);;All Files (*.*)"
         )
         if file_path:
-            # Chuẩn hóa đường dẫn theo Windows
             norm_path = os.path.normpath(file_path)
             target_line_edit.setText(norm_path)
             self.save_settings()
@@ -709,22 +762,19 @@ class MasterApp(QMainWindow):
             pass
 
     def execute_binary(self, path):
-        """Khởi động ứng dụng chuẩn xác 100% như Double-Click chuột trên Windows Desktop"""
         if not path or not os.path.exists(path):
             return False
 
         abs_path = os.path.abspath(path)
         app_dir = os.path.dirname(abs_path)
 
-        # Cách 1: os.startfile (Chuẩn nhất của Windows, tương đương click đúp chuột)
         try:
-            os.chdir(app_dir)  # Ép chuyển thư mục làm việc về đúng thư mục của app
+            os.chdir(app_dir)
             os.startfile(abs_path)
             return True
         except Exception:
             pass
 
-        # Cách 2: ShellExecuteW dự phòng
         try:
             ret = ctypes.windll.shell32.ShellExecuteW(None, "open", abs_path, None, app_dir, 1)
             if ret > 32:
@@ -732,7 +782,6 @@ class MasterApp(QMainWindow):
         except Exception:
             pass
 
-        # Cách 3: Subprocess với đúng cwd
         try:
             subprocess.Popen([abs_path], cwd=app_dir, shell=False)
             return True
@@ -769,33 +818,41 @@ class MasterApp(QMainWindow):
 
         if qt_path and os.path.exists(qt_path):
             if is_process_running_by_path(qt_path):
-                results.append("QT đã được khởi động")
+                results.append("QT đã được khởi động từ trước.")
             else:
                 if self.execute_binary(qt_path):
-                    results.append("Khởi chạy QT thành công")
+                    results.append("Khởi chạy QT thành công.")
                 else:
-                    results.append("Lỗi khởi chạy QT")
+                    results.append("Lỗi khởi chạy QT.")
         else:
-            results.append("Đường dẫn QT chưa hợp lệ")
+            results.append("Đường dẫn QT chưa hợp lệ.")
 
-        # Hoãn 1.5 giây mới bật tiếp TINKER để tránh 2 app tranh chấp lúc mở
-        def run_second_app():
+        self.btn_launch_both.setEnabled(False)
+        self.status_boot_label.setText("Đã kích hoạt QT. Đang chờ 30 giây để bật TINKER...")
+
+        def launch_tinker_after_30s():
+            self.btn_launch_both.setEnabled(True)
             if tinker_path and os.path.exists(tinker_path):
                 if is_process_running_by_path(tinker_path):
-                    results.append("TINKER đã được khởi động")
+                    tinker_msg = "TINKER đã được khởi động từ trước."
                 else:
                     if self.execute_binary(tinker_path):
-                        results.append("Khởi chạy TINKER thành công")
+                        tinker_msg = "Khởi chạy TINKER thành công sau 30s!"
                     else:
-                        results.append("Lỗi khởi chạy TINKER")
+                        tinker_msg = "Lỗi khởi chạy TINKER."
             else:
-                results.append("Đường dẫn TINKER chưa hợp lệ")
+                tinker_msg = "Đường dẫn TINKER chưa hợp lệ."
 
-            final_message = "\n".join(results)
-            self.show_alert("Thông báo hệ thống", final_message)
+            self.status_boot_label.setText(tinker_msg)
+            self.show_alert("Thông báo hệ thống", f"Tiến trình hoàn tất:\n{tinker_msg}")
             QTimer.singleShot(1500, self.check_app_status_ui)
 
-        QTimer.singleShot(1200, run_second_app)
+        current_status = "\n".join(results)
+        self.show_alert(
+            "Tiến trình bắt đầu", 
+            f"{current_status}\n\n-> Hệ thống sẽ tự động bật TINKER sau đúng 30 giây nữa!"
+        )
+        QTimer.singleShot(30000, launch_tinker_after_30s)
 
     def auto_start_both_silent(self):
         qt_path = self.txt_qt.text().strip()
@@ -803,14 +860,17 @@ class MasterApp(QMainWindow):
 
         if qt_path and os.path.exists(qt_path) and not is_process_running_by_path(qt_path):
             self.execute_binary(qt_path)
+            self.status_boot_label.setText("Đã bật QT. Đang đếm lùi 30 giây để bật TINKER...")
+        else:
+            self.status_boot_label.setText("QT đã hoạt động. Đang chờ 30 giây để kiểm tra TINKER...")
 
-        def start_tinker():
+        def start_tinker_after_30s():
             if tinker_path and os.path.exists(tinker_path) and not is_process_running_by_path(tinker_path):
                 self.execute_binary(tinker_path)
+                self.status_boot_label.setText("Đã tự động khởi chạy TINKER sau 30 giây!")
             self.check_app_status_ui()
 
-        # Bật QT trước, sau 2 giây mới bật TINKER
-        QTimer.singleShot(2000, start_tinker)
+        QTimer.singleShot(30000, start_tinker_after_30s)
 
     def check_app_status_ui(self):
         qt_running = is_process_running_by_path(self.txt_qt.text().strip())
