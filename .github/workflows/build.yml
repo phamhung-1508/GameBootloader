@@ -8,24 +8,24 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - name: Lay ma nguon
+    - name: Checkout Code
       uses: actions/checkout@v4
 
-    - name: Cai dat Python
+    - name: Setup Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
-    - name: Cai dat thu vien can thiet
+    - name: Install Libraries
       run: |
         python -m pip install --upgrade pip
         pip install PyQt5 psutil pywin32 pyinstaller
 
-    - name: Dong goi file EXE
+    - name: Build Standalone EXE
       run: |
-        pyinstaller --onefile --noconsole --collect-all PyQt5 --collect-all win32gui --name="GameBootloader" "AUTO START QT vs TINKER.py"
+        pyinstaller --onefile --noconsole --collect-all PyQt5 --collect-all win32gui --collect-all win32ui --hidden-import=win32timezone --name="GameBootloader" "AUTO START QT vs TINKER.py"
 
-    - name: Luu file EXE de tai ve
+    - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: GameBootloader-EXE
