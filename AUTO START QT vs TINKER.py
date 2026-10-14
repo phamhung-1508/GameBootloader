@@ -8,64 +8,13 @@ import ctypes
 from ctypes import wintypes
 import psutil
 
-# ==========================================================
-#  1. TỰ ĐỘNG NÂNG QUYỀN ADMINISTRATOR TRƯỚC (BẮT BUỘC)
-# ==========================================================
-def is_admin():
-    try:
-        return ctypes.windll.shell32.IsUserAnAdmin() != 0
-    except Exception:
-        return False
-
-if not is_admin():
-    try:
-        if getattr(sys, 'frozen', False):
-            exe_path = sys.executable
-            args = ""
-        else:
-            exe_path = sys.executable
-            args = f'"{os.path.abspath(__file__)}"'
-        
-        ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe_path, args, None, 1)
-        if ret > 32:
-            sys.exit(0)
-    except Exception:
-        pass
-
-# ==========================================================
-#  2. CƠ CHẾ ĐƠN THỰC THỂ (CHỐNG CHẠY 2 APP TRÙNG LẶP)
-# ==========================================================
-kernel32 = ctypes.windll.kernel32
-MUTEX_NAME = "Local\\Mir4_Master_Hub_SingleInstance_PhamHung"
-app_mutex = kernel32.CreateMutexW(None, False, MUTEX_NAME)
-ERROR_ALREADY_EXISTS = 183
-
-if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
-    # Nếu đã có app đang chạy, tìm cửa sổ cũ đưa lên trước rồi tắt bản mới
-    try:
-        import win32gui
-        import win32con
-        def bring_to_front(hwnd, extra):
-            if win32gui.IsWindowVisible(hwnd):
-                title = win32gui.GetWindowText(hwnd)
-                if "Mir4 Master Hub" in title:
-                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-                    win32gui.SetForegroundWindow(hwnd)
-                    return False
-            return True
-        win32gui.EnumWindows(bring_to_front, None)
-    except Exception:
-        pass
-    sys.exit(0)
-
-# ==========================================================
-#  3. THƯ VIỆN ĐỒ HỌA & ẨN CONSOLE ĐEN
-# ==========================================================
+# Thư viện đồ họa Windows
 import win32gui
 import win32ui
 import win32con
 import win32console
 
+# Ẩn cửa sổ console đen nếu có
 try:
     hwnd_console = win32console.GetConsoleWindow()
     if hwnd_console:
@@ -81,6 +30,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QTimer, QRect, QPoint
 from PyQt5.QtGui import QImage, QPixmap, QPainter, QIcon
+from PyQt5.QtNetwork import QLocalServer, QLocalSocket
 
 def get_app_dir():
     if getattr(sys, 'frozen', False):
@@ -89,6 +39,7 @@ def get_app_dir():
 
 CONFIG_FILE = os.path.join(get_app_dir(), "boot_config.json")
 REG_APP_NAME = "Mir4_Master_Hub_PhamHung"
+SINGLE_APP_SERVER_NAME = "Mir4_Master_Hub_SingleInstance_Socket_PhamHung"
 
 
 def get_current_exe_path():
@@ -119,7 +70,7 @@ def is_process_running_by_path(target_path):
 
 
 # ==========================================================
-#  4. MODULE MIR4 WALL MANAGER (TỐI ƯU NHẸ CPU)
+#                   MODULE MIR4 WALL MANAGER
 # ==========================================================
 
 def capture_window_pixmap(hwnd, target_w, target_h):
@@ -240,9 +191,6 @@ class ThumbnailCard(QFrame):
 class MasterApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        # Giữ tham chiếu mutex để không bị giải phóng
-        self.mutex_ref = app_mutex
-
         self.setWindowTitle("Mir4 Master Hub - Auto Launcher & Wall Manager [PHAMHUNG]")
         self.resize(1340, 850)
         self.setStyleSheet("""
@@ -289,12 +237,12 @@ class MasterApp(QMainWindow):
         self.render_timer = QTimer(self)
         self.render_timer.timeout.connect(self.update_frames)
 
-        # Timer quét phát hiện game mới mở/đóng (5 giây/lần)
+        # Timer quét phát hiện game mới mở/đóng (5s/lần)
         self.scan_timer = QTimer(self)
         self.scan_timer.timeout.connect(self.scan_windows)
         self.scan_timer.start(5000)
 
-        # Timer Watchdog cho QT & TINKER (6 giây/lần)
+        # Timer Watchdog cho QT & TINKER (6s/lần để tiết kiệm CPU)
         self.watchdog_timer = QTimer(self)
         self.watchdog_timer.timeout.connect(self.check_and_recover_apps)
         self.watchdog_timer.start(6000)
@@ -958,8 +906,38 @@ class MasterApp(QMainWindow):
             self.status_boot_label.setText("Đã tắt tự khởi động Hub cùng Windows.")
 
 
+# ==========================================================
+#                   ĐIỂM KHỞI CHẠY CHÍNH (MAIN)
+# ==========================================================
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+
+    # Cơ chế Single Instance an toàn tuyệt đối bằng QLocalSocket (Không bao giờ bị nghẽn ngầm)
+    socket = QLocalSocket()
+    socket.connectToServer(SINGLE_APP_SERVER_NAME)
+    if socket.waitForConnected(500):
+        # Đã có app đang chạy -> Kích hoạt app cũ nổi lên rồi thoát
+        try:
+            def bring_existing_to_front(hwnd, extra):
+                if win32gui.IsWindowVisible(hwnd):
+                    title = win32gui.GetWindowText(hwnd)
+                    if "Mir4 Master Hub" in title:
+                        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                        win32gui.SetForegroundWindow(hwnd)
+                        return False
+                return True
+            win32gui.EnumWindows(bring_existing_to_front, None)
+        except Exception:
+            pass
+        sys.exit(0)
+
+    # Nếu chưa chạy, tạo Server giữ phiên duy nhất
+    local_server = QLocalServer()
+    # Dọn socket cũ nếu Windows tắt đột ngột
+    QLocalServer.removeServer(SINGLE_APP_SERVER_NAME)
+    local_server.listen(SINGLE_APP_SERVER_NAME)
+
     window = MasterApp()
     window.show()
     sys.exit(app.exec_())
