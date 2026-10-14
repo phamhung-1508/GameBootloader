@@ -8,15 +8,14 @@ import ctypes
 from ctypes import wintypes
 import psutil
 
-# Kiểm tra và tự nâng quyền Administrator nếu chưa có
+# 1. Kiểm tra và yêu cầu quyền Administrator an toàn
 def is_admin():
     try:
-        return ctypes.windll.shell32.IsUserAnAdmin()
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
     except Exception:
         return False
 
 if not is_admin():
-    # Gọi lại chính chương trình này dưới quyền Administrator
     try:
         if getattr(sys, 'frozen', False):
             exe_path = sys.executable
@@ -24,18 +23,21 @@ if not is_admin():
         else:
             exe_path = sys.executable
             args = f'"{os.path.abspath(__file__)}"'
-        ctypes.windll.shell32.ShellExecuteW(None, "runas", exe_path, args, None, 1)
-        sys.exit(0)
+        
+        # Gọi hộp thoại UAC hỏi cấp quyền Admin
+        ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe_path, args, None, 1)
+        if ret > 32:
+            sys.exit(0)
     except Exception:
         pass
 
-# Thư viện đồ họa Windows
+# 2. Thư viện đồ họa Windows
 import win32gui
 import win32ui
 import win32con
 import win32console
 
-# Ẩn console đen
+# Ẩn console đen khi chạy
 try:
     hwnd_console = win32console.GetConsoleWindow()
     if hwnd_console:
@@ -49,7 +51,7 @@ from PyQt5.QtWidgets import (
     QFileDialog, QCheckBox, QFrame, QMessageBox,
     QTabWidget, QScrollArea, QComboBox, QSlider, QSizePolicy
 )
-from PyQt5.QtCore import Qt, QTimer, QRect
+from PyQt5.QtCore import Qt, QTimer, QRect, QPoint
 from PyQt5.QtGui import QImage, QPixmap, QPainter, QIcon
 
 CONFIG_FILE = "boot_config.json"
@@ -88,6 +90,7 @@ def is_process_running_by_path(target_path):
 # ==========================================================
 
 def capture_window_pixmap(hwnd, target_w, target_h):
+    """Chụp trực tiếp bộ đệm đồ họa game (Dual-engine: PrintWindow + BitBlt)"""
     try:
         if not win32gui.IsWindow(hwnd):
             return None
@@ -112,6 +115,7 @@ def capture_window_pixmap(hwnd, target_w, target_h):
         saveBitMap.CreateCompatibleBitmap(mfcDC, w, h)
         saveDC.SelectObject(saveBitMap)
 
+        # Chế độ bắt hình ưu tiên PW_RENDERFULLCONTENT = 2
         res = ctypes.windll.user32.PrintWindow(hwnd, saveDC.GetSafeHdc(), 2)
         if res == 0:
             res = ctypes.windll.user32.PrintWindow(hwnd, saveDC.GetSafeHdc(), 0)
@@ -135,6 +139,7 @@ def capture_window_pixmap(hwnd, target_w, target_h):
 
 
 class ThumbnailCard(QFrame):
+    """Card hiển thị trực tiếp đồ họa bằng QPainter để không bao giờ bị đen"""
     def __init__(self, hwnd, title, index, parent=None):
         super().__init__(parent)
         self.hwnd = hwnd
@@ -199,7 +204,7 @@ class ThumbnailCard(QFrame):
 
 
 # ==========================================================
-#                   CỬA SỔ CHÍNH TỔNG HỢP
+#                   CỬA SỔ CHÍNH TỔNG HỢP (MASTER APP)
 # ==========================================================
 
 class MasterApp(QMainWindow):
@@ -248,16 +253,17 @@ class MasterApp(QMainWindow):
 
         self.init_ui()
 
-        # Timers cho Wall Manager
+        # Timer cập nhật khung hình
         self.render_timer = QTimer(self)
         self.render_timer.timeout.connect(self.update_frames)
         self.render_timer.start(33)  # Mặc định 30 FPS
 
+        # Timer quét phát hiện game mới mở/đóng
         self.scan_timer = QTimer(self)
         self.scan_timer.timeout.connect(self.scan_windows)
         self.scan_timer.start(3000)
 
-        # Timers cho Bootloader / Watchdog
+        # Timer Watchdog cho QT & TINKER
         self.watchdog_timer = QTimer(self)
         self.watchdog_timer.timeout.connect(self.check_and_recover_apps)
         self.watchdog_timer.start(3000)
@@ -358,7 +364,7 @@ class MasterApp(QMainWindow):
 
         tab_wall_layout.addLayout(toolbar)
 
-        # Khung lưới hiển thị game
+        # Khung lưới cuộn hiển thị game
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setStyleSheet("QScrollArea { border: 1px solid #292930; background-color: #121214; }")
@@ -430,7 +436,7 @@ class MasterApp(QMainWindow):
         h_tinker = QHBoxLayout()
         self.txt_tinker = QLineEdit(self.config["tinker_path"])
         self.txt_tinker.setPlaceholderText("Đường dẫn file TINKER (.exe)...")
-        self.txt_tinker.setStyleSheet("background-color: #242429; color: white; border: 1px solid #444; border-radius: 4px; padding: 6px;")
+        self.txt_tinker.setStyleSheet("background-color: #242429; color: white; border-radius: 4px; border: 1px solid #444; padding: 6px;")
         h_tinker.addWidget(self.txt_tinker)
 
         btn_browse_tinker = QPushButton("Chọn file...")
@@ -643,7 +649,7 @@ class MasterApp(QMainWindow):
         self.status_wall_label.setText(f"Tìm thấy: {len(self.cards)} / 50 cửa sổ")
 
     def update_frames(self):
-        # Chỉ quét và vẽ nếu đang mở ở tab Bức Tường Game
+        # Chỉ quét và vẽ nếu đang mở ở tab Bức Tường Game (Viewport Culling)
         if self.tabs.currentIndex() != 0 or not self.isVisible() or self.isMinimized() or not self.cards:
             return
 
