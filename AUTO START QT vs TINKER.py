@@ -1,5 +1,13 @@
 import sys
 import os
+import io
+
+# 1. Chống crash ngầm bắt buộc khi dùng PyInstaller --windowed/--noconsole
+if sys.stdout is None:
+    sys.stdout = io.StringIO()
+if sys.stderr is None:
+    sys.stderr = io.StringIO()
+
 import re
 import json
 import subprocess
@@ -8,7 +16,13 @@ import winreg
 import ctypes
 import traceback
 
-# Bọc kiểm tra import để tránh văng ngầm
+# 2. Bẫy lỗi Crash ngay từ đầu
+def show_fatal_error(msg):
+    try:
+        ctypes.windll.user32.MessageBoxW(0, str(msg), "Lỗi Khởi Động", 0x10)
+    except Exception:
+        pass
+
 try:
     import psutil
     import win32gui
@@ -23,9 +37,10 @@ try:
     from PyQt5.QtCore import Qt, QTimer
     from PyQt5.QtGui import QImage, QPixmap, QPainter, QIcon
 except Exception as e:
-    ctypes.windll.user32.MessageBoxW(0, f"Lỗi khởi động thư viện:\n{traceback.format_exc()}", "Lỗi Khởi Động", 0x10)
+    show_fatal_error(f"Không thể tải thư viện:\n{traceback.format_exc()}")
     sys.exit(1)
 
+# Thư mục chứa cấu hình nằm cố định cùng file exe thực tế
 def get_base_dir():
     if getattr(sys, 'frozen', False):
         return os.path.dirname(sys.executable)
@@ -40,7 +55,6 @@ def is_process_running(exe_path):
         return False
     target_abs = os.path.abspath(exe_path).lower()
     target_name = os.path.basename(exe_path).lower()
-
     try:
         for proc in psutil.process_iter(['exe', 'name']):
             try:
@@ -63,7 +77,6 @@ def kill_process_by_path(exe_path):
     target_abs = os.path.abspath(exe_path).lower()
     target_name = os.path.basename(exe_path).lower()
     killed = False
-
     try:
         for proc in psutil.process_iter(['exe', 'name']):
             try:
@@ -82,24 +95,20 @@ def kill_process_by_path(exe_path):
 def launch_like_desktop(exe_path):
     if not exe_path or not os.path.exists(exe_path):
         return False
-    
     abs_path = os.path.abspath(exe_path)
     working_dir = os.path.dirname(abs_path)
-
     try:
         os.chdir(working_dir)
         os.startfile(abs_path)
         return True
     except Exception:
         pass
-
     try:
         ret = ctypes.windll.shell32.ShellExecuteW(None, "open", abs_path, None, working_dir, 1)
         if ret > 32:
             return True
     except Exception:
         pass
-
     try:
         subprocess.Popen([abs_path], cwd=working_dir, shell=False)
         return True
@@ -252,6 +261,7 @@ class MasterApp(QMainWindow):
         if os.path.exists("app_icon.ico"):
             self.setWindowIcon(QIcon("app_icon.ico"))
 
+        # Cấu hình lưu trữ
         self.config = {
             "qt_path": "",
             "tinker_path": "",
@@ -978,4 +988,4 @@ if __name__ == "__main__":
         window.show()
         sys.exit(app.exec_())
     except Exception as e:
-        ctypes.windll.user32.MessageBoxW(0, f"Lỗi xảy ra trong Main App:\n{traceback.format_exc()}", "Crash Error", 0x10)
+        show_fatal_error(f"Lỗi xảy ra trong Main App:\n{traceback.format_exc()}")
