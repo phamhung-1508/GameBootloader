@@ -24,7 +24,7 @@ jobs:
     - name: Build Standalone EXE
       shell: cmd
       run: |
-        pyinstaller --onefile --noconsole --collect-all PyQt5 --hidden-import=win32timezone --hidden-import=win32gui --hidden-import=win32ui --hidden-import=win32con --name="GameBootloader" "AUTO START QT vs TINKER.py"
+        pyinstaller --noconfirm --onefile --windowed --name="GameBootloader" "AUTO START QT vs TINKER.py"
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
