@@ -6,30 +6,25 @@ import subprocess
 import time
 import winreg
 import ctypes
-import psutil
+import traceback
 
-# Thư viện Win32 đồ họa
-import win32gui
-import win32ui
-import win32con
-import win32console
-
-# Ẩn cửa sổ console đen nếu có
+# Bọc kiểm tra import để tránh văng ngầm
 try:
-    hwnd_console = win32console.GetConsoleWindow()
-    if hwnd_console:
-        win32gui.ShowWindow(hwnd_console, win32con.SW_HIDE)
-except Exception:
-    pass
-
-from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, 
-    QHBoxLayout, QGridLayout, QPushButton, QLabel, QLineEdit, 
-    QFileDialog, QCheckBox, QFrame, QMessageBox,
-    QTabWidget, QScrollArea, QComboBox, QSlider
-)
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QImage, QPixmap, QPainter, QIcon
+    import psutil
+    import win32gui
+    import win32ui
+    import win32con
+    from PyQt5.QtWidgets import (
+        QApplication, QMainWindow, QWidget, QVBoxLayout, 
+        QHBoxLayout, QGridLayout, QPushButton, QLabel, QLineEdit, 
+        QFileDialog, QCheckBox, QFrame, QMessageBox,
+        QTabWidget, QScrollArea, QComboBox, QSlider
+    )
+    from PyQt5.QtCore import Qt, QTimer
+    from PyQt5.QtGui import QImage, QPixmap, QPainter, QIcon
+except Exception as e:
+    ctypes.windll.user32.MessageBoxW(0, f"Lỗi khởi động thư viện:\n{traceback.format_exc()}", "Lỗi Khởi Động", 0x10)
+    sys.exit(1)
 
 def get_base_dir():
     if getattr(sys, 'frozen', False):
@@ -977,7 +972,10 @@ class MasterApp(QMainWindow):
 # ==========================================================
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = MasterApp()
-    window.show()
-    sys.exit(app.exec_())
+    try:
+        app = QApplication(sys.argv)
+        window = MasterApp()
+        window.show()
+        sys.exit(app.exec_())
+    except Exception as e:
+        ctypes.windll.user32.MessageBoxW(0, f"Lỗi xảy ra trong Main App:\n{traceback.format_exc()}", "Crash Error", 0x10)
