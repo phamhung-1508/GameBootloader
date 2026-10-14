@@ -9,38 +9,7 @@ from ctypes import wintypes
 import psutil
 
 # ==========================================================
-#       1. CƠ CHẾ ĐƠN THỰC THỂ (CHỐNG MỞ 2 APP TRÙNG LẶP)
-# ==========================================================
-MUTEX_NAME = "Global\\Mir4_Master_Hub_SingleInstance_PhamHung"
-kernel32 = ctypes.windll.kernel32
-user32 = ctypes.windll.user32
-
-mutex = kernel32.CreateMutexW(None, False, MUTEX_NAME)
-last_error = kernel32.GetLastError()
-ERROR_ALREADY_EXISTS = 183
-
-if last_error == ERROR_ALREADY_EXISTS:
-    # Nếu đã có app đang chạy, tìm và đưa cửa sổ đó lên trên rồi thoát
-    def bring_existing_to_front():
-        def enum_cb(hwnd, extra):
-            if win32gui.IsWindowVisible(hwnd):
-                title = win32gui.GetWindowText(hwnd)
-                if "Mir4 Master Hub" in title and "[PHAMHUNG]" in title:
-                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-                    win32gui.SetForegroundWindow(hwnd)
-                    return False
-            return True
-        try:
-            import win32gui
-            import win32con
-            win32gui.EnumWindows(enum_cb, None)
-        except Exception:
-            pass
-    bring_existing_to_front()
-    sys.exit(0)
-
-# ==========================================================
-#       2. TỰ ĐỘNG NÂNG QUYỀN ADMINISTRATOR AN TOÀN
+#  1. TỰ ĐỘNG NÂNG QUYỀN ADMINISTRATOR TRƯỚC (BẮT BUỘC)
 # ==========================================================
 def is_admin():
     try:
@@ -64,7 +33,33 @@ if not is_admin():
         pass
 
 # ==========================================================
-#       3. THƯ VIỆN ĐỒ HỌA & ẨN CONSOLE ĐEN
+#  2. CƠ CHẾ ĐƠN THỰC THỂ (CHỐNG CHẠY 2 APP TRÙNG LẶP)
+# ==========================================================
+kernel32 = ctypes.windll.kernel32
+MUTEX_NAME = "Local\\Mir4_Master_Hub_SingleInstance_PhamHung"
+app_mutex = kernel32.CreateMutexW(None, False, MUTEX_NAME)
+ERROR_ALREADY_EXISTS = 183
+
+if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
+    # Nếu đã có app đang chạy, tìm cửa sổ cũ đưa lên trước rồi tắt bản mới
+    try:
+        import win32gui
+        import win32con
+        def bring_to_front(hwnd, extra):
+            if win32gui.IsWindowVisible(hwnd):
+                title = win32gui.GetWindowText(hwnd)
+                if "Mir4 Master Hub" in title:
+                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                    win32gui.SetForegroundWindow(hwnd)
+                    return False
+            return True
+        win32gui.EnumWindows(bring_to_front, None)
+    except Exception:
+        pass
+    sys.exit(0)
+
+# ==========================================================
+#  3. THƯ VIỆN ĐỒ HỌA & ẨN CONSOLE ĐEN
 # ==========================================================
 import win32gui
 import win32ui
@@ -124,7 +119,7 @@ def is_process_running_by_path(target_path):
 
 
 # ==========================================================
-#       4. MODULE MIR4 WALL MANAGER (TỐI ƯU NHẸ CPU)
+#  4. MODULE MIR4 WALL MANAGER (TỐI ƯU NHẸ CPU)
 # ==========================================================
 
 def capture_window_pixmap(hwnd, target_w, target_h):
@@ -245,6 +240,9 @@ class ThumbnailCard(QFrame):
 class MasterApp(QMainWindow):
     def __init__(self):
         super().__init__()
+        # Giữ tham chiếu mutex để không bị giải phóng
+        self.mutex_ref = app_mutex
+
         self.setWindowTitle("Mir4 Master Hub - Auto Launcher & Wall Manager [PHAMHUNG]")
         self.resize(1340, 850)
         self.setStyleSheet("""
@@ -296,12 +294,12 @@ class MasterApp(QMainWindow):
         self.scan_timer.timeout.connect(self.scan_windows)
         self.scan_timer.start(5000)
 
-        # Timer Watchdog cho QT & TINKER (6 giây/lần để tiết kiệm tối đa CPU)
+        # Timer Watchdog cho QT & TINKER (6 giây/lần)
         self.watchdog_timer = QTimer(self)
         self.watchdog_timer.timeout.connect(self.check_and_recover_apps)
         self.watchdog_timer.start(6000)
 
-        # Khởi chạy ban đầu
+        # Khởi chạy kiểm tra ban đầu
         QTimer.singleShot(200, self.check_app_status_ui)
 
         if self.config.get("auto_start_apps", True):
@@ -578,10 +576,9 @@ class MasterApp(QMainWindow):
         ad_layout.addWidget(gold_badge)
         main_layout.addWidget(self.ad_banner)
 
-    # ================= LOGIC TIẾT KIỆM TÀI NGUYÊN (CPU OPTIMIZER) =================
+    # ================= LOGIC TIẾT KIỆM CPU =================
 
     def on_tab_changed(self, index):
-        """Khi ở Tab 1 (Auto) thì DỪNG vẽ Wall để CPU về 0%. Sang Tab 2 mới bật lại."""
         if index == 1:
             if self.current_fps > 0 and not self.render_timer.isActive():
                 interval = max(16, int(1000 / self.current_fps))
@@ -591,7 +588,6 @@ class MasterApp(QMainWindow):
             self.render_timer.stop()
 
     def changeEvent(self, event):
-        """Khi thu nhỏ (Minimize) xuống Taskbar thì dừng vẽ để tối ưu máy"""
         super().changeEvent(event)
         if self.isMinimized():
             self.render_timer.stop()
