@@ -36,7 +36,6 @@ import win32ui
 import win32con
 import win32console
 
-# Ẩn console đen
 try:
     hwnd_console = win32console.GetConsoleWindow()
     if hwnd_console:
@@ -44,7 +43,6 @@ try:
 except Exception:
     pass
 
-# Import đầy đủ toàn bộ component PyQt5 (Đã thêm QGridLayout)
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, 
     QHBoxLayout, QGridLayout, QPushButton, QLabel, QLineEdit, 
@@ -54,7 +52,13 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QTimer, QRect, QPoint
 from PyQt5.QtGui import QImage, QPixmap, QPainter, QIcon
 
-CONFIG_FILE = "boot_config.json"
+# Xác định đường dẫn file cấu hình luôn nằm cạnh file .exe thực tế
+def get_app_dir():
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+CONFIG_FILE = os.path.join(get_app_dir(), "boot_config.json")
 REG_APP_NAME = "Mir4_Master_Hub_PhamHung"
 
 
@@ -207,7 +211,7 @@ class ThumbnailCard(QFrame):
 class MasterApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Mir4 Master Hub - Wall Manager & Auto Launcher [PHAMHUNG]")
+        self.setWindowTitle("Mir4 Master Hub - Auto Launcher & Wall Manager [PHAMHUNG]")
         self.resize(1340, 850)
         self.setStyleSheet("""
             QMainWindow { background-color: #121214; }
@@ -235,9 +239,9 @@ class MasterApp(QMainWindow):
         self.config = {
             "qt_path": "",
             "tinker_path": "",
-            "auto_start_apps": False,
+            "auto_start_apps": True,
             "auto_restart_crash": True,
-            "delay_seconds": 3
+            "delay_seconds": 2
         }
         self.load_config()
 
@@ -250,10 +254,10 @@ class MasterApp(QMainWindow):
 
         self.init_ui()
 
-        # Timer cập nhật khung hình
+        # Timer cập nhật khung hình cho Wall
         self.render_timer = QTimer(self)
         self.render_timer.timeout.connect(self.update_frames)
-        self.render_timer.start(33)  # Mặc định 30 FPS
+        self.render_timer.start(33)
 
         # Timer quét phát hiện game mới mở/đóng
         self.scan_timer = QTimer(self)
@@ -266,12 +270,13 @@ class MasterApp(QMainWindow):
         self.watchdog_timer.start(3000)
 
         # Khởi chạy ban đầu
-        QTimer.singleShot(100, self.scan_windows)
-        QTimer.singleShot(500, self.check_app_status_ui)
+        QTimer.singleShot(200, self.check_app_status_ui)
+        QTimer.singleShot(500, self.scan_windows)
 
-        if self.config.get("auto_start_apps", False):
-            delay_ms = self.config.get("delay_seconds", 3) * 1000
-            self.status_boot_label.setText(f"Tự động chạy sau {self.config.get('delay_seconds', 3)}s...")
+        # Tự khởi chạy QT & TINKER khi mở app
+        if self.config.get("auto_start_apps", True):
+            delay_ms = self.config.get("delay_seconds", 2) * 1000
+            self.status_boot_label.setText(f"Tự động chạy QT & TINKER sau {self.config.get('delay_seconds', 2)}s...")
             QTimer.singleShot(delay_ms, self.auto_start_both_silent)
 
     def init_ui(self):
@@ -283,7 +288,132 @@ class MasterApp(QMainWindow):
 
         self.tabs = QTabWidget()
 
-        # ================= TAB 1: BỨC TƯỜNG GAME =================
+        # ================= TAB 1: QUẢN LÝ AUTO (QT & TINKER) =================
+        tab_boot = QWidget()
+        tab_boot_layout = QVBoxLayout(tab_boot)
+        tab_boot_layout.setContentsMargins(20, 20, 20, 20)
+        tab_boot_layout.setSpacing(15)
+
+        boot_box = QFrame()
+        boot_box.setStyleSheet("background-color: #1a1a1e; border: 1px solid #2e2e38; border-radius: 8px;")
+        boot_box_layout = QVBoxLayout(boot_box)
+        boot_box_layout.setContentsMargins(20, 15, 20, 15)
+        boot_box_layout.setSpacing(12)
+
+        # 1. QT
+        h_qt_title = QHBoxLayout()
+        lbl_qt = QLabel("1. Phần mềm QT:")
+        lbl_qt.setStyleSheet("border: none; font-weight: bold; color: #00e5ff; font-size: 14px;")
+        h_qt_title.addWidget(lbl_qt)
+        self.status_qt_badge = QLabel("⚪ Đang kiểm tra...")
+        self.status_qt_badge.setStyleSheet("border: none; font-size: 11px; font-weight: bold; color: #888;")
+        h_qt_title.addWidget(self.status_qt_badge)
+        h_qt_title.addStretch()
+        boot_box_layout.addLayout(h_qt_title)
+
+        h_qt = QHBoxLayout()
+        self.txt_qt = QLineEdit(self.config.get("qt_path", ""))
+        self.txt_qt.setPlaceholderText("Đường dẫn file QT (.exe)...")
+        self.txt_qt.setStyleSheet("background-color: #242429; color: white; border: 1px solid #444; border-radius: 4px; padding: 6px;")
+        self.txt_qt.textChanged.connect(self.save_settings)
+        h_qt.addWidget(self.txt_qt)
+
+        btn_browse_qt = QPushButton("Chọn file...")
+        btn_browse_qt.setFixedHeight(32)
+        btn_browse_qt.setStyleSheet("background-color: #383842; color: white; border-radius: 4px; padding: 0 12px;")
+        btn_browse_qt.clicked.connect(lambda: self.browse_file(self.txt_qt))
+        h_qt.addWidget(btn_browse_qt)
+
+        btn_run_qt = QPushButton("Chạy QT")
+        btn_run_qt.setFixedHeight(32)
+        btn_run_qt.setStyleSheet("background-color: #007acc; color: white; font-weight: bold; border-radius: 4px; padding: 0 15px;")
+        btn_run_qt.clicked.connect(lambda: self.on_manual_launch_single(self.txt_qt.text().strip(), "QT"))
+        h_qt.addWidget(btn_run_qt)
+        boot_box_layout.addLayout(h_qt)
+
+        # 2. TINKER
+        h_tinker_title = QHBoxLayout()
+        lbl_tinker = QLabel("2. Phần mềm TINKER:")
+        lbl_tinker.setStyleSheet("border: none; font-weight: bold; color: #00e676; font-size: 14px;")
+        h_tinker_title.addWidget(lbl_tinker)
+        self.status_tinker_badge = QLabel("⚪ Đang kiểm tra...")
+        self.status_tinker_badge.setStyleSheet("border: none; font-size: 11px; font-weight: bold; color: #888;")
+        h_tinker_title.addWidget(self.status_tinker_badge)
+        h_tinker_title.addStretch()
+        boot_box_layout.addLayout(h_tinker_title)
+
+        h_tinker = QHBoxLayout()
+        self.txt_tinker = QLineEdit(self.config.get("tinker_path", ""))
+        self.txt_tinker.setPlaceholderText("Đường dẫn file TINKER (.exe)...")
+        self.txt_tinker.setStyleSheet("background-color: #242429; color: white; border-radius: 4px; border: 1px solid #444; padding: 6px;")
+        self.txt_tinker.textChanged.connect(self.save_settings)
+        h_tinker.addWidget(self.txt_tinker)
+
+        btn_browse_tinker = QPushButton("Chọn file...")
+        btn_browse_tinker.setFixedHeight(32)
+        btn_browse_tinker.setStyleSheet("background-color: #383842; color: white; border-radius: 4px; padding: 0 12px;")
+        btn_browse_tinker.clicked.connect(lambda: self.browse_file(self.txt_tinker))
+        h_tinker.addWidget(btn_browse_tinker)
+
+        btn_run_tinker = QPushButton("Chạy Tinker")
+        btn_run_tinker.setFixedHeight(32)
+        btn_run_tinker.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; border-radius: 4px; padding: 0 15px;")
+        btn_run_tinker.clicked.connect(lambda: self.on_manual_launch_single(self.txt_tinker.text().strip(), "TINKER"))
+        h_tinker.addWidget(btn_run_tinker)
+        boot_box_layout.addLayout(h_tinker)
+
+        tab_boot_layout.addWidget(boot_box)
+
+        # Tùy chọn khởi chạy & Watchdog
+        opts_layout = QVBoxLayout()
+        opts_layout.setSpacing(8)
+
+        h_opts1 = QHBoxLayout()
+        self.chk_windows_startup = QCheckBox("Tự khởi động toàn bộ Hub cùng Windows")
+        self.chk_windows_startup.setChecked(self.is_startup_enabled())
+        self.chk_windows_startup.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 13px;")
+        self.chk_windows_startup.stateChanged.connect(self.toggle_startup)
+        h_opts1.addWidget(self.chk_windows_startup)
+
+        self.chk_auto_launch_tools = QCheckBox("Tự bật 2 Tool khi mở App")
+        self.chk_auto_launch_tools.setChecked(self.config.get("auto_start_apps", True))
+        self.chk_auto_launch_tools.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 13px;")
+        self.chk_auto_launch_tools.stateChanged.connect(self.save_settings)
+        h_opts1.addWidget(self.chk_auto_launch_tools)
+        opts_layout.addLayout(h_opts1)
+
+        self.chk_auto_restart = QCheckBox("🛡️ Giám sát & Tự động bật lại khi QT hoặc TINKER bị Tắt / Crash")
+        self.chk_auto_restart.setChecked(self.config.get("auto_restart_crash", True))
+        self.chk_auto_restart.setStyleSheet("color: #ffaa00; font-weight: bold; font-size: 13px;")
+        self.chk_auto_restart.stateChanged.connect(self.save_settings)
+        opts_layout.addWidget(self.chk_auto_restart)
+
+        tab_boot_layout.addLayout(opts_layout)
+
+        # Nút khởi chạy cả 2 tool
+        self.btn_launch_both = QPushButton("🚀 KHỞI CHẠY CẢ 2 PHẦN MỀM (QT & TINKER)")
+        self.btn_launch_both.setFixedHeight(45)
+        self.btn_launch_both.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ff6600, stop:1 #ff8533);
+                color: white; font-size: 14px; font-weight: bold; border-radius: 6px;
+            }
+            QPushButton:hover { background: #ff944d; }
+        """)
+        self.btn_launch_both.clicked.connect(self.on_manual_launch_both)
+        tab_boot_layout.addWidget(self.btn_launch_both)
+
+        self.status_boot_label = QLabel("Hệ thống giám sát đang chạy ngầm.")
+        self.status_boot_label.setAlignment(Qt.AlignCenter)
+        self.status_boot_label.setStyleSheet("color: #00e676; font-size: 13px; font-weight: bold;")
+        tab_boot_layout.addWidget(self.status_boot_label)
+
+        tab_boot_layout.addStretch()
+
+        # ĐẶT TAB 1 LÀ QUẢN LÝ AUTO
+        self.tabs.addTab(tab_boot, "⚙️ QUẢN LÝ AUTO (QT & TINKER)")
+
+        # ================= TAB 2: BỨC TƯỜNG GAME =================
         tab_wall = QWidget()
         tab_wall_layout = QVBoxLayout(tab_wall)
         tab_wall_layout.setContentsMargins(5, 5, 5, 5)
@@ -361,7 +491,6 @@ class MasterApp(QMainWindow):
 
         tab_wall_layout.addLayout(toolbar)
 
-        # Khung lưới cuộn hiển thị game (QGridLayout đã được nạp)
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setStyleSheet("QScrollArea { border: 1px solid #292930; background-color: #121214; }")
@@ -375,128 +504,8 @@ class MasterApp(QMainWindow):
         self.scroll_area.setWidget(self.scroll_widget)
         tab_wall_layout.addWidget(self.scroll_area, 1)
 
+        # ĐẶT TAB 2 LÀ BỨC TƯỜNG GAME
         self.tabs.addTab(tab_wall, "🖥️ BỨC TƯỜNG GAME (MIR4 WALL)")
-
-        # ================= TAB 2: QUẢN LÝ AUTO (QT & TINKER) =================
-        tab_boot = QWidget()
-        tab_boot_layout = QVBoxLayout(tab_boot)
-        tab_boot_layout.setContentsMargins(20, 20, 20, 20)
-        tab_boot_layout.setSpacing(15)
-
-        boot_box = QFrame()
-        boot_box.setStyleSheet("background-color: #1a1a1e; border: 1px solid #2e2e38; border-radius: 8px;")
-        boot_box_layout = QVBoxLayout(boot_box)
-        boot_box_layout.setContentsMargins(20, 15, 20, 15)
-        boot_box_layout.setSpacing(12)
-
-        # 1. QT
-        h_qt_title = QHBoxLayout()
-        lbl_qt = QLabel("1. Phần mềm QT:")
-        lbl_qt.setStyleSheet("border: none; font-weight: bold; color: #00e5ff; font-size: 14px;")
-        h_qt_title.addWidget(lbl_qt)
-        self.status_qt_badge = QLabel("⚪ Đang kiểm tra...")
-        self.status_qt_badge.setStyleSheet("border: none; font-size: 11px; font-weight: bold; color: #888;")
-        h_qt_title.addWidget(self.status_qt_badge)
-        h_qt_title.addStretch()
-        boot_box_layout.addLayout(h_qt_title)
-
-        h_qt = QHBoxLayout()
-        self.txt_qt = QLineEdit(self.config["qt_path"])
-        self.txt_qt.setPlaceholderText("Đường dẫn file QT (.exe)...")
-        self.txt_qt.setStyleSheet("background-color: #242429; color: white; border: 1px solid #444; border-radius: 4px; padding: 6px;")
-        h_qt.addWidget(self.txt_qt)
-
-        btn_browse_qt = QPushButton("Chọn file...")
-        btn_browse_qt.setFixedHeight(32)
-        btn_browse_qt.setStyleSheet("background-color: #383842; color: white; border-radius: 4px; padding: 0 12px;")
-        btn_browse_qt.clicked.connect(lambda: self.browse_file(self.txt_qt))
-        h_qt.addWidget(btn_browse_qt)
-
-        btn_run_qt = QPushButton("Chạy QT")
-        btn_run_qt.setFixedHeight(32)
-        btn_run_qt.setStyleSheet("background-color: #007acc; color: white; font-weight: bold; border-radius: 4px; padding: 0 15px;")
-        btn_run_qt.clicked.connect(lambda: self.on_manual_launch_single(self.txt_qt.text().strip(), "QT"))
-        h_qt.addWidget(btn_run_qt)
-        boot_box_layout.addLayout(h_qt)
-
-        # 2. TINKER
-        h_tinker_title = QHBoxLayout()
-        lbl_tinker = QLabel("2. Phần mềm TINKER:")
-        lbl_tinker.setStyleSheet("border: none; font-weight: bold; color: #00e676; font-size: 14px;")
-        h_tinker_title.addWidget(lbl_tinker)
-        self.status_tinker_badge = QLabel("⚪ Đang kiểm tra...")
-        self.status_tinker_badge.setStyleSheet("border: none; font-size: 11px; font-weight: bold; color: #888;")
-        h_tinker_title.addWidget(self.status_tinker_badge)
-        h_tinker_title.addStretch()
-        boot_box_layout.addLayout(h_tinker_title)
-
-        h_tinker = QHBoxLayout()
-        self.txt_tinker = QLineEdit(self.config["tinker_path"])
-        self.txt_tinker.setPlaceholderText("Đường dẫn file TINKER (.exe)...")
-        self.txt_tinker.setStyleSheet("background-color: #242429; color: white; border-radius: 4px; border: 1px solid #444; padding: 6px;")
-        h_tinker.addWidget(self.txt_tinker)
-
-        btn_browse_tinker = QPushButton("Chọn file...")
-        btn_browse_tinker.setFixedHeight(32)
-        btn_browse_tinker.setStyleSheet("background-color: #383842; color: white; border-radius: 4px; padding: 0 12px;")
-        btn_browse_tinker.clicked.connect(lambda: self.browse_file(self.txt_tinker))
-        h_tinker.addWidget(btn_browse_tinker)
-
-        btn_run_tinker = QPushButton("Chạy Tinker")
-        btn_run_tinker.setFixedHeight(32)
-        btn_run_tinker.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; border-radius: 4px; padding: 0 15px;")
-        btn_run_tinker.clicked.connect(lambda: self.on_manual_launch_single(self.txt_tinker.text().strip(), "TINKER"))
-        h_tinker.addWidget(btn_run_tinker)
-        boot_box_layout.addLayout(h_tinker)
-
-        tab_boot_layout.addWidget(boot_box)
-
-        # Tùy chọn khởi chạy & Watchdog
-        opts_layout = QVBoxLayout()
-        opts_layout.setSpacing(8)
-
-        h_opts1 = QHBoxLayout()
-        self.chk_windows_startup = QCheckBox("Tự khởi động toàn bộ Hub cùng Windows")
-        self.chk_windows_startup.setChecked(self.is_startup_enabled())
-        self.chk_windows_startup.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 13px;")
-        self.chk_windows_startup.stateChanged.connect(self.toggle_startup)
-        h_opts1.addWidget(self.chk_windows_startup)
-
-        self.chk_auto_launch_tools = QCheckBox("Tự bật 2 Tool khi mở App")
-        self.chk_auto_launch_tools.setChecked(self.config["auto_start_apps"])
-        self.chk_auto_launch_tools.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 13px;")
-        self.chk_auto_launch_tools.stateChanged.connect(self.save_settings)
-        h_opts1.addWidget(self.chk_auto_launch_tools)
-        opts_layout.addLayout(h_opts1)
-
-        self.chk_auto_restart = QCheckBox("🛡️ Giám sát & Tự động bật lại khi QT hoặc TINKER bị Tắt / Crash")
-        self.chk_auto_restart.setChecked(self.config.get("auto_restart_crash", True))
-        self.chk_auto_restart.setStyleSheet("color: #ffaa00; font-weight: bold; font-size: 13px;")
-        self.chk_auto_restart.stateChanged.connect(self.save_settings)
-        opts_layout.addWidget(self.chk_auto_restart)
-
-        tab_boot_layout.addLayout(opts_layout)
-
-        # Nút khởi chạy cả 2 tool
-        self.btn_launch_both = QPushButton("🚀 KHỞI CHẠY CẢ 2 PHẦN MỀM (QT & TINKER)")
-        self.btn_launch_both.setFixedHeight(45)
-        self.btn_launch_both.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ff6600, stop:1 #ff8533);
-                color: white; font-size: 14px; font-weight: bold; border-radius: 6px;
-            }
-            QPushButton:hover { background: #ff944d; }
-        """)
-        self.btn_launch_both.clicked.connect(self.on_manual_launch_both)
-        tab_boot_layout.addWidget(self.btn_launch_both)
-
-        self.status_boot_label = QLabel("Hệ thống giám sát đang chạy ngầm.")
-        self.status_boot_label.setAlignment(Qt.AlignCenter)
-        self.status_boot_label.setStyleSheet("color: #00e676; font-size: 13px; font-weight: bold;")
-        tab_boot_layout.addWidget(self.status_boot_label)
-
-        tab_boot_layout.addStretch()
-        self.tabs.addTab(tab_boot, "⚙️ QUẢN LÝ AUTO (QT & TINKER)")
 
         main_layout.addWidget(self.tabs, 1)
 
@@ -646,8 +655,8 @@ class MasterApp(QMainWindow):
         self.status_wall_label.setText(f"Tìm thấy: {len(self.cards)} / 50 cửa sổ")
 
     def update_frames(self):
-        # Viewport Culling: Chỉ chụp ảnh các ô đang trong tầm nhìn để chống lag
-        if self.tabs.currentIndex() != 0 or not self.isVisible() or self.isMinimized() or not self.cards:
+        # Chỉ quét và vẽ nếu đang mở ở tab Bức Tường Game (Tab index = 1)
+        if self.tabs.currentIndex() != 1 or not self.isVisible() or self.isMinimized() or not self.cards:
             return
 
         scroll_y = self.scroll_area.verticalScrollBar().value()
@@ -684,16 +693,18 @@ class MasterApp(QMainWindow):
         if os.path.exists(CONFIG_FILE):
             try:
                 with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                    self.config.update(json.load(f))
+                    data = json.load(f)
+                    self.config.update(data)
             except Exception:
                 pass
 
     def save_settings(self):
-        self.config["qt_path"] = self.txt_qt.text().strip()
-        self.config["tinker_path"] = self.txt_tinker.text().strip()
-        self.config["auto_start_apps"] = self.chk_auto_launch_tools.isChecked()
-        self.config["auto_restart_crash"] = self.chk_auto_restart.isChecked()
         try:
+            self.config["qt_path"] = self.txt_qt.text().strip()
+            self.config["tinker_path"] = self.txt_tinker.text().strip()
+            self.config["auto_start_apps"] = self.chk_auto_launch_tools.isChecked()
+            self.config["auto_restart_crash"] = self.chk_auto_restart.isChecked()
+            
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(self.config, f, ensure_ascii=False, indent=4)
         except Exception:
@@ -811,9 +822,16 @@ class MasterApp(QMainWindow):
             self.status_boot_label.setText("Phát hiện TINKER bị tắt! Đang tự động bật lại...")
             self.execute_binary(tinker_path)
 
-    # ================= REGISTRY STARTUP =================
+    # ================= KHỞI ĐỘNG CÙNG WINDOWS (REGISTRY + STARTUP FOLDER) =================
+
+    def get_startup_shortcut_path(self):
+        startup_dir = os.path.join(os.environ["APPDATA"], r"Microsoft\Windows\Start Menu\Programs\Startup")
+        return os.path.join(startup_dir, "Mir4_Master_Hub.bat")
 
     def is_startup_enabled(self):
+        # Kiểm tra file startup batch hoặc Registry
+        if os.path.exists(self.get_startup_shortcut_path()):
+            return True
         try:
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_READ)
             winreg.QueryValueEx(key, REG_APP_NAME)
@@ -823,22 +841,44 @@ class MasterApp(QMainWindow):
             return False
 
     def toggle_startup(self, state):
+        exe_path = get_current_exe_path()
+        bat_file = self.get_startup_shortcut_path()
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
-        try:
-            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
-            if state == Qt.Checked:
-                exe_path = f'"{get_current_exe_path()}"'
-                winreg.SetValueEx(key, REG_APP_NAME, 0, winreg.REG_SZ, exe_path)
-                self.status_boot_label.setText("Đã kích hoạt tự khởi động Hub cùng Windows.")
-            else:
+
+        if state == Qt.Checked:
+            # 1. Tạo file khởi động .bat trong thư mục Startup (cực kỳ ổn định cho quyền Admin)
+            try:
+                with open(bat_file, "w", encoding="utf-8") as f:
+                    f.write(f'@echo off\nstart "" "{exe_path}"\n')
+            except Exception:
+                pass
+
+            # 2. Ghi thêm vào Registry
+            try:
+                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
+                winreg.SetValueEx(key, REG_APP_NAME, 0, winreg.REG_SZ, f'"{exe_path}"')
+                winreg.CloseKey(key)
+            except Exception:
+                pass
+
+            self.status_boot_label.setText("Đã kích hoạt tự khởi động Hub cùng Windows.")
+        else:
+            # Xóa file Startup .bat
+            if os.path.exists(bat_file):
                 try:
-                    winreg.DeleteValue(key, REG_APP_NAME)
-                except FileNotFoundError:
+                    os.remove(bat_file)
+                except Exception:
                     pass
-                self.status_boot_label.setText("Đã tắt tự khởi động Hub cùng Windows.")
-            winreg.CloseKey(key)
-        except Exception as e:
-            self.show_alert("Lỗi Registry", f"Không thể thiết lập khởi động cùng Windows: {str(e)}")
+
+            # Xóa Registry
+            try:
+                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
+                winreg.DeleteValue(key, REG_APP_NAME)
+                winreg.CloseKey(key)
+            except Exception:
+                pass
+
+            self.status_boot_label.setText("Đã tắt tự khởi động Hub cùng Windows.")
 
 
 if __name__ == "__main__":
