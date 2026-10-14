@@ -5,7 +5,6 @@ import json
 import subprocess
 import winreg
 import ctypes
-from ctypes import wintypes
 import psutil
 
 # Thư viện đồ họa Windows
@@ -14,7 +13,7 @@ import win32ui
 import win32con
 import win32console
 
-# Ẩn cửa sổ console đen nếu có
+# Ẩn cửa sổ dòng lệnh console
 try:
     hwnd_console = win32console.GetConsoleWindow()
     if hwnd_console:
@@ -26,11 +25,10 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, 
     QHBoxLayout, QGridLayout, QPushButton, QLabel, QLineEdit, 
     QFileDialog, QCheckBox, QFrame, QMessageBox,
-    QTabWidget, QScrollArea, QComboBox, QSlider, QSizePolicy
+    QTabWidget, QScrollArea, QComboBox, QSlider
 )
-from PyQt5.QtCore import Qt, QTimer, QRect, QPoint
+from PyQt5.QtCore import Qt, QTimer, QSharedMemory
 from PyQt5.QtGui import QImage, QPixmap, QPainter, QIcon
-from PyQt5.QtNetwork import QLocalServer, QLocalSocket
 
 def get_app_dir():
     if getattr(sys, 'frozen', False):
@@ -39,7 +37,7 @@ def get_app_dir():
 
 CONFIG_FILE = os.path.join(get_app_dir(), "boot_config.json")
 REG_APP_NAME = "Mir4_Master_Hub_PhamHung"
-SINGLE_APP_SERVER_NAME = "Mir4_Master_Hub_SingleInstance_Socket_PhamHung"
+SHARED_MEM_KEY = "Mir4_Master_Hub_SingleInstance_Key_PH"
 
 
 def get_current_exe_path():
@@ -224,6 +222,7 @@ class MasterApp(QMainWindow):
         }
         self.load_config()
 
+        self.waiting_tinker_countdown = False
         self.current_cols = 4
         self.cards = {}
         self.auto_scale = True
@@ -233,23 +232,23 @@ class MasterApp(QMainWindow):
 
         self.init_ui()
 
-        # Timer cập nhật khung hình
+        # Timer cập nhật hình ảnh game
         self.render_timer = QTimer(self)
         self.render_timer.timeout.connect(self.update_frames)
 
-        # Timer quét phát hiện game mới mở/đóng (5s/lần)
+        # Timer quét game mới (5s/lần)
         self.scan_timer = QTimer(self)
         self.scan_timer.timeout.connect(self.scan_windows)
         self.scan_timer.start(5000)
 
-        # Timer Watchdog cho QT & TINKER (6s/lần để tiết kiệm CPU)
+        # Timer Watchdog (6s/lần)
         self.watchdog_timer = QTimer(self)
         self.watchdog_timer.timeout.connect(self.check_and_recover_apps)
         self.watchdog_timer.start(6000)
 
-        # Khởi chạy kiểm tra ban đầu
-        QTimer.singleShot(200, self.check_app_status_ui)
+        QTimer.singleShot(300, self.check_app_status_ui)
 
+        # Tự động bật QT, sau 30s bật TINKER
         if self.config.get("auto_start_apps", True):
             delay_ms = self.config.get("delay_seconds", 2) * 1000
             self.status_boot_label.setText(f"Tự động chạy QT sau {self.config.get('delay_seconds', 2)}s...")
@@ -378,7 +377,7 @@ class MasterApp(QMainWindow):
         self.btn_launch_both.clicked.connect(self.on_manual_launch_both)
         tab_boot_layout.addWidget(self.btn_launch_both)
 
-        self.status_boot_label = QLabel("Hệ thống giám sát đang chạy ngầm (Chế độ tiết kiệm CPU).")
+        self.status_boot_label = QLabel("Hệ thống giám sát đang chạy ngầm.")
         self.status_boot_label.setAlignment(Qt.AlignCenter)
         self.status_boot_label.setStyleSheet("color: #00e676; font-size: 13px; font-weight: bold;")
         tab_boot_layout.addWidget(self.status_boot_label)
@@ -760,6 +759,7 @@ class MasterApp(QMainWindow):
 
         results = []
 
+        # 1. Bật QT
         if qt_path and os.path.exists(qt_path):
             if is_process_running_by_path(qt_path):
                 results.append("QT đã được khởi động từ trước.")
@@ -771,10 +771,13 @@ class MasterApp(QMainWindow):
         else:
             results.append("Đường dẫn QT chưa hợp lệ.")
 
+        self.waiting_tinker_countdown = True
         self.btn_launch_both.setEnabled(False)
         self.status_boot_label.setText("Đã kích hoạt QT. Đang chờ 30 giây để bật TINKER...")
 
+        # 2. Hẹn giờ chính xác 30s để bật TINKER
         def launch_tinker_after_30s():
+            self.waiting_tinker_countdown = False
             self.btn_launch_both.setEnabled(True)
             if tinker_path and os.path.exists(tinker_path):
                 if is_process_running_by_path(tinker_path):
@@ -808,7 +811,10 @@ class MasterApp(QMainWindow):
         else:
             self.status_boot_label.setText("QT đã hoạt động. Đang chờ 30 giây để kiểm tra TINKER...")
 
+        self.waiting_tinker_countdown = True
+
         def start_tinker_after_30s():
+            self.waiting_tinker_countdown = False
             if tinker_path and os.path.exists(tinker_path) and not is_process_running_by_path(tinker_path):
                 self.execute_binary(tinker_path)
                 self.status_boot_label.setText("Đã tự động khởi chạy TINKER sau 30 giây!")
@@ -836,6 +842,10 @@ class MasterApp(QMainWindow):
         return qt_running, tinker_running
 
     def check_and_recover_apps(self):
+        # Tránh Watchdog gọi TINKER khi đang trong 30s đếm ngược
+        if self.waiting_tinker_countdown:
+            return
+
         qt_path = self.txt_qt.text().strip()
         tinker_path = self.txt_tinker.text().strip()
 
@@ -913,13 +923,12 @@ class MasterApp(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 
-    # Cơ chế Single Instance an toàn tuyệt đối bằng QLocalSocket (Không bao giờ bị nghẽn ngầm)
-    socket = QLocalSocket()
-    socket.connectToServer(SINGLE_APP_SERVER_NAME)
-    if socket.waitForConnected(500):
-        # Đã có app đang chạy -> Kích hoạt app cũ nổi lên rồi thoát
+    # Cơ chế Single Instance an toàn tuyệt đối bằng QSharedMemory
+    shared_mem = QSharedMemory(SHARED_MEM_KEY)
+    if not shared_mem.create(1):
+        # Bộ nhớ đã tồn tại -> Tìm cửa sổ đang chạy đưa lên trước rồi thoát
         try:
-            def bring_existing_to_front(hwnd, extra):
+            def bring_to_front(hwnd, extra):
                 if win32gui.IsWindowVisible(hwnd):
                     title = win32gui.GetWindowText(hwnd)
                     if "Mir4 Master Hub" in title:
@@ -927,16 +936,10 @@ if __name__ == "__main__":
                         win32gui.SetForegroundWindow(hwnd)
                         return False
                 return True
-            win32gui.EnumWindows(bring_existing_to_front, None)
+            win32gui.EnumWindows(bring_to_front, None)
         except Exception:
             pass
         sys.exit(0)
-
-    # Nếu chưa chạy, tạo Server giữ phiên duy nhất
-    local_server = QLocalServer()
-    # Dọn socket cũ nếu Windows tắt đột ngột
-    QLocalServer.removeServer(SINGLE_APP_SERVER_NAME)
-    local_server.listen(SINGLE_APP_SERVER_NAME)
 
     window = MasterApp()
     window.show()
