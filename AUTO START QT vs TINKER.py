@@ -8,7 +8,7 @@ import ctypes
 from ctypes import wintypes
 import psutil
 
-# 1. Kiểm tra và yêu cầu quyền Administrator an toàn
+# 1. Kiểm tra và tự nâng quyền Administrator an toàn
 def is_admin():
     try:
         return ctypes.windll.shell32.IsUserAnAdmin() != 0
@@ -24,7 +24,6 @@ if not is_admin():
             exe_path = sys.executable
             args = f'"{os.path.abspath(__file__)}"'
         
-        # Gọi hộp thoại UAC hỏi cấp quyền Admin
         ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe_path, args, None, 1)
         if ret > 32:
             sys.exit(0)
@@ -37,7 +36,7 @@ import win32ui
 import win32con
 import win32console
 
-# Ẩn console đen khi chạy
+# Ẩn console đen
 try:
     hwnd_console = win32console.GetConsoleWindow()
     if hwnd_console:
@@ -45,9 +44,10 @@ try:
 except Exception:
     pass
 
+# Import đầy đủ toàn bộ component PyQt5 (Đã thêm QGridLayout)
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, 
-    QHBoxLayout, QPushButton, QLabel, QLineEdit, 
+    QHBoxLayout, QGridLayout, QPushButton, QLabel, QLineEdit, 
     QFileDialog, QCheckBox, QFrame, QMessageBox,
     QTabWidget, QScrollArea, QComboBox, QSlider, QSizePolicy
 )
@@ -90,7 +90,6 @@ def is_process_running_by_path(target_path):
 # ==========================================================
 
 def capture_window_pixmap(hwnd, target_w, target_h):
-    """Chụp trực tiếp bộ đệm đồ họa game (Dual-engine: PrintWindow + BitBlt)"""
     try:
         if not win32gui.IsWindow(hwnd):
             return None
@@ -115,7 +114,6 @@ def capture_window_pixmap(hwnd, target_w, target_h):
         saveBitMap.CreateCompatibleBitmap(mfcDC, w, h)
         saveDC.SelectObject(saveBitMap)
 
-        # Chế độ bắt hình ưu tiên PW_RENDERFULLCONTENT = 2
         res = ctypes.windll.user32.PrintWindow(hwnd, saveDC.GetSafeHdc(), 2)
         if res == 0:
             res = ctypes.windll.user32.PrintWindow(hwnd, saveDC.GetSafeHdc(), 0)
@@ -139,7 +137,6 @@ def capture_window_pixmap(hwnd, target_w, target_h):
 
 
 class ThumbnailCard(QFrame):
-    """Card hiển thị trực tiếp đồ họa bằng QPainter để không bao giờ bị đen"""
     def __init__(self, hwnd, title, index, parent=None):
         super().__init__(parent)
         self.hwnd = hwnd
@@ -364,7 +361,7 @@ class MasterApp(QMainWindow):
 
         tab_wall_layout.addLayout(toolbar)
 
-        # Khung lưới cuộn hiển thị game
+        # Khung lưới cuộn hiển thị game (QGridLayout đã được nạp)
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setStyleSheet("QScrollArea { border: 1px solid #292930; background-color: #121214; }")
@@ -649,7 +646,7 @@ class MasterApp(QMainWindow):
         self.status_wall_label.setText(f"Tìm thấy: {len(self.cards)} / 50 cửa sổ")
 
     def update_frames(self):
-        # Chỉ quét và vẽ nếu đang mở ở tab Bức Tường Game (Viewport Culling)
+        # Viewport Culling: Chỉ chụp ảnh các ô đang trong tầm nhìn để chống lag
         if self.tabs.currentIndex() != 0 or not self.isVisible() or self.isMinimized() or not self.cards:
             return
 
