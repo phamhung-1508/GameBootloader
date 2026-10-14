@@ -24,12 +24,10 @@ jobs:
     - name: Build Standalone EXE
       shell: cmd
       run: |
-        pyinstaller --noconfirm --onedir --windowed --hidden-import=win32timezone --hidden-import=win32gui --hidden-import=win32ui --hidden-import=win32con --name=GameBootloader "AUTO START QT vs TINKER.py"
-        cd dist
-        tar -czvf GameBootloader.zip GameBootloader
+        pyinstaller --onefile --noconsole --collect-all PyQt5 --hidden-import=win32timezone --hidden-import=win32gui --hidden-import=win32ui --hidden-import=win32con --name="GameBootloader" "AUTO START QT vs TINKER.py"
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: GameBootloader-App
-        path: dist/GameBootloader.zip
+        name: GameBootloader-EXE
+        path: dist/GameBootloader.exe
