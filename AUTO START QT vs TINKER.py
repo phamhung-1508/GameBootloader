@@ -264,10 +264,10 @@ class MasterApp(QMainWindow):
         self.scan_timer.timeout.connect(self.scan_windows)
         self.scan_timer.start(3000)
 
-        # Timer Watchdog cho QT & TINKER
+        # Timer Watchdog cho QT & TINKER (quét mỗi 4 giây)
         self.watchdog_timer = QTimer(self)
         self.watchdog_timer.timeout.connect(self.check_and_recover_apps)
-        self.watchdog_timer.start(3000)
+        self.watchdog_timer.start(4000)
 
         # Khởi chạy ban đầu
         QTimer.singleShot(200, self.check_app_status_ui)
@@ -410,7 +410,6 @@ class MasterApp(QMainWindow):
 
         tab_boot_layout.addStretch()
 
-        # ĐẶT TAB 1 LÀ QUẢN LÝ AUTO
         self.tabs.addTab(tab_boot, "⚙️ QUẢN LÝ AUTO (QT & TINKER)")
 
         # ================= TAB 2: BỨC TƯỜNG GAME =================
@@ -419,7 +418,6 @@ class MasterApp(QMainWindow):
         tab_wall_layout.setContentsMargins(5, 5, 5, 5)
         tab_wall_layout.setSpacing(8)
 
-        # Toolbar Wall Manager
         toolbar = QHBoxLayout()
         toolbar.setSpacing(12)
 
@@ -504,7 +502,6 @@ class MasterApp(QMainWindow):
         self.scroll_area.setWidget(self.scroll_widget)
         tab_wall_layout.addWidget(self.scroll_area, 1)
 
-        # ĐẶT TAB 2 LÀ BỨC TƯỜNG GAME
         self.tabs.addTab(tab_wall, "🖥️ BỨC TƯỜNG GAME (MIR4 WALL)")
 
         main_layout.addWidget(self.tabs, 1)
@@ -655,7 +652,6 @@ class MasterApp(QMainWindow):
         self.status_wall_label.setText(f"Tìm thấy: {len(self.cards)} / 50 cửa sổ")
 
     def update_frames(self):
-        # Chỉ quét và vẽ nếu đang mở ở tab Bức Tường Game (Tab index = 1)
         if self.tabs.currentIndex() != 1 or not self.isVisible() or self.isMinimized() or not self.cards:
             return
 
@@ -685,7 +681,9 @@ class MasterApp(QMainWindow):
             self, "Chọn file chương trình", "", "Executable Files (*.exe *.bat *.py);;All Files (*.*)"
         )
         if file_path:
-            target_line_edit.setText(file_path)
+            # Chuẩn hóa đường dẫn theo Windows
+            norm_path = os.path.normpath(file_path)
+            target_line_edit.setText(norm_path)
             self.save_settings()
             self.check_app_status_ui()
 
@@ -711,11 +709,32 @@ class MasterApp(QMainWindow):
             pass
 
     def execute_binary(self, path):
+        """Khởi động ứng dụng chuẩn xác 100% như Double-Click chuột trên Windows Desktop"""
         if not path or not os.path.exists(path):
             return False
+
+        abs_path = os.path.abspath(path)
+        app_dir = os.path.dirname(abs_path)
+
+        # Cách 1: os.startfile (Chuẩn nhất của Windows, tương đương click đúp chuột)
         try:
-            app_dir = os.path.dirname(path)
-            subprocess.Popen(path, cwd=app_dir, shell=True)
+            os.chdir(app_dir)  # Ép chuyển thư mục làm việc về đúng thư mục của app
+            os.startfile(abs_path)
+            return True
+        except Exception:
+            pass
+
+        # Cách 2: ShellExecuteW dự phòng
+        try:
+            ret = ctypes.windll.shell32.ShellExecuteW(None, "open", abs_path, None, app_dir, 1)
+            if ret > 32:
+                return True
+        except Exception:
+            pass
+
+        # Cách 3: Subprocess với đúng cwd
+        try:
+            subprocess.Popen([abs_path], cwd=app_dir, shell=False)
             return True
         except Exception:
             return False
@@ -759,20 +778,24 @@ class MasterApp(QMainWindow):
         else:
             results.append("Đường dẫn QT chưa hợp lệ")
 
-        if tinker_path and os.path.exists(tinker_path):
-            if is_process_running_by_path(tinker_path):
-                results.append("TINKER đã được khởi động")
-            else:
-                if self.execute_binary(tinker_path):
-                    results.append("Khởi chạy TINKER thành công")
+        # Hoãn 1.5 giây mới bật tiếp TINKER để tránh 2 app tranh chấp lúc mở
+        def run_second_app():
+            if tinker_path and os.path.exists(tinker_path):
+                if is_process_running_by_path(tinker_path):
+                    results.append("TINKER đã được khởi động")
                 else:
-                    results.append("Lỗi khởi chạy TINKER")
-        else:
-            results.append("Đường dẫn TINKER chưa hợp lệ")
+                    if self.execute_binary(tinker_path):
+                        results.append("Khởi chạy TINKER thành công")
+                    else:
+                        results.append("Lỗi khởi chạy TINKER")
+            else:
+                results.append("Đường dẫn TINKER chưa hợp lệ")
 
-        final_message = "\n".join(results)
-        self.show_alert("Thông báo hệ thống", final_message)
-        QTimer.singleShot(1500, self.check_app_status_ui)
+            final_message = "\n".join(results)
+            self.show_alert("Thông báo hệ thống", final_message)
+            QTimer.singleShot(1500, self.check_app_status_ui)
+
+        QTimer.singleShot(1200, run_second_app)
 
     def auto_start_both_silent(self):
         qt_path = self.txt_qt.text().strip()
@@ -781,10 +804,13 @@ class MasterApp(QMainWindow):
         if qt_path and os.path.exists(qt_path) and not is_process_running_by_path(qt_path):
             self.execute_binary(qt_path)
 
-        if tinker_path and os.path.exists(tinker_path) and not is_process_running_by_path(tinker_path):
-            self.execute_binary(tinker_path)
+        def start_tinker():
+            if tinker_path and os.path.exists(tinker_path) and not is_process_running_by_path(tinker_path):
+                self.execute_binary(tinker_path)
+            self.check_app_status_ui()
 
-        self.check_app_status_ui()
+        # Bật QT trước, sau 2 giây mới bật TINKER
+        QTimer.singleShot(2000, start_tinker)
 
     def check_app_status_ui(self):
         qt_running = is_process_running_by_path(self.txt_qt.text().strip())
@@ -822,14 +848,13 @@ class MasterApp(QMainWindow):
             self.status_boot_label.setText("Phát hiện TINKER bị tắt! Đang tự động bật lại...")
             self.execute_binary(tinker_path)
 
-    # ================= KHỞI ĐỘNG CÙNG WINDOWS (REGISTRY + STARTUP FOLDER) =================
+    # ================= KHỞI ĐỘNG CÙNG WINDOWS =================
 
     def get_startup_shortcut_path(self):
         startup_dir = os.path.join(os.environ["APPDATA"], r"Microsoft\Windows\Start Menu\Programs\Startup")
         return os.path.join(startup_dir, "Mir4_Master_Hub.bat")
 
     def is_startup_enabled(self):
-        # Kiểm tra file startup batch hoặc Registry
         if os.path.exists(self.get_startup_shortcut_path()):
             return True
         try:
@@ -846,14 +871,12 @@ class MasterApp(QMainWindow):
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
         if state == Qt.Checked:
-            # 1. Tạo file khởi động .bat trong thư mục Startup (cực kỳ ổn định cho quyền Admin)
             try:
                 with open(bat_file, "w", encoding="utf-8") as f:
                     f.write(f'@echo off\nstart "" "{exe_path}"\n')
             except Exception:
                 pass
 
-            # 2. Ghi thêm vào Registry
             try:
                 key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
                 winreg.SetValueEx(key, REG_APP_NAME, 0, winreg.REG_SZ, f'"{exe_path}"')
@@ -863,14 +886,12 @@ class MasterApp(QMainWindow):
 
             self.status_boot_label.setText("Đã kích hoạt tự khởi động Hub cùng Windows.")
         else:
-            # Xóa file Startup .bat
             if os.path.exists(bat_file):
                 try:
                     os.remove(bat_file)
                 except Exception:
                     pass
 
-            # Xóa Registry
             try:
                 key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
                 winreg.DeleteValue(key, REG_APP_NAME)
