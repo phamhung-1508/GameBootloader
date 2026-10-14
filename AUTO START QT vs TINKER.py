@@ -8,13 +8,13 @@ import winreg
 import ctypes
 import psutil
 
-# Thư viện đồ họa Win32
+# Thư viện Win32 đồ họa
 import win32gui
 import win32ui
 import win32con
 import win32console
 
-# Ẩn màn hình đen Console
+# Ẩn cửa sổ console đen nếu có
 try:
     hwnd_console = win32console.GetConsoleWindow()
     if hwnd_console:
@@ -41,7 +41,6 @@ REG_STARTUP_KEY = "Mir4_Master_Hub_PhamHung"
 
 
 def is_process_running(exe_path):
-    """Kiểm tra tiến trình đang chạy an toàn"""
     if not exe_path or not os.path.exists(exe_path):
         return False
     target_abs = os.path.abspath(exe_path).lower()
@@ -64,7 +63,6 @@ def is_process_running(exe_path):
 
 
 def kill_process_by_path(exe_path):
-    """Dừng tiến trình khi bấm nút Dừng"""
     if not exe_path or not os.path.exists(exe_path):
         return False
     target_abs = os.path.abspath(exe_path).lower()
@@ -87,14 +85,12 @@ def kill_process_by_path(exe_path):
 
 
 def launch_like_desktop(exe_path):
-    """Khởi động file chuẩn xác 100% giống như click chuột ngoài desktop"""
     if not exe_path or not os.path.exists(exe_path):
         return False
     
     abs_path = os.path.abspath(exe_path)
     working_dir = os.path.dirname(abs_path)
 
-    # 1. os.startfile (Chuẩn nhất của Windows)
     try:
         os.chdir(working_dir)
         os.startfile(abs_path)
@@ -102,7 +98,6 @@ def launch_like_desktop(exe_path):
     except Exception:
         pass
 
-    # 2. ShellExecuteW
     try:
         ret = ctypes.windll.shell32.ShellExecuteW(None, "open", abs_path, None, working_dir, 1)
         if ret > 32:
@@ -110,7 +105,6 @@ def launch_like_desktop(exe_path):
     except Exception:
         pass
 
-    # 3. Subprocess
     try:
         subprocess.Popen([abs_path], cwd=working_dir, shell=False)
         return True
@@ -263,7 +257,6 @@ class MasterApp(QMainWindow):
         if os.path.exists("app_icon.ico"):
             self.setWindowIcon(QIcon("app_icon.ico"))
 
-        # Cấu hình lưu trữ mặc định
         self.config = {
             "qt_path": "",
             "tinker_path": "",
@@ -273,11 +266,9 @@ class MasterApp(QMainWindow):
         }
         self.load_config()
 
-        # Biến điều khiển Watchdog và Cooldown chống spam
         self.is_waiting_30s = False
         self.last_launch_time = {}
 
-        # Biến điều khiển Wall Manager
         self.current_cols = 4
         self.cards = {}
         self.auto_scale = True
@@ -295,15 +286,13 @@ class MasterApp(QMainWindow):
         self.scan_timer.timeout.connect(self.scan_windows)
         self.scan_timer.start(5000)
 
-        # Timer Watchdog Tab 1 (Quét mỗi 5 giây)
+        # Timer Watchdog Tab 1
         self.watchdog_timer = QTimer(self)
         self.watchdog_timer.timeout.connect(self.watchdog_check_and_recover)
         self.watchdog_timer.start(5000)
 
-        # Quét trạng thái giao diện lần đầu
         QTimer.singleShot(300, self.check_app_status_ui)
 
-        # Tự động kích hoạt các Tool nếu cấu hình có bật
         if self.config.get("auto_start_tools", True):
             self.status_boot_label.setText("Tự động kích hoạt: Khởi động QT trước, chờ 30s kích hoạt 2 tool còn lại...")
             QTimer.singleShot(1500, self.start_sequence_flow)
@@ -324,7 +313,6 @@ class MasterApp(QMainWindow):
         tab_boot_layout.setContentsMargins(20, 15, 20, 15)
         tab_boot_layout.setSpacing(12)
 
-        # Khung chứa 3 đường dẫn Tool
         box_frame = QFrame()
         box_frame.setStyleSheet("background-color: #1a1a1e; border: 1px solid #2e2e38; border-radius: 8px;")
         box_layout = QVBoxLayout(box_frame)
@@ -452,7 +440,7 @@ class MasterApp(QMainWindow):
 
         tab_boot_layout.addLayout(opts_layout)
 
-        # 2 Nút điều khiển: Khởi chạy tất cả / Dừng tất cả
+        # 2 Nút: Khởi chạy tất cả / Dừng tất cả
         h_btns = QHBoxLayout()
         h_btns.setSpacing(12)
 
@@ -705,12 +693,10 @@ class MasterApp(QMainWindow):
             QMessageBox.critical(self, "Lỗi", f"Không thể khởi động file {name}!")
 
     def start_sequence_flow(self):
-        """Khởi động QT trước, chờ đúng 30 giây rồi mở 2 Tool còn lại"""
         qt_path = self.txt_qt.text().strip()
         tinker_path = self.txt_tinker.text().strip()
         other_path = self.txt_other.text().strip()
 
-        # 1. Mở QT nếu chưa chạy
         if qt_path and os.path.exists(qt_path):
             if not is_process_running(qt_path):
                 launch_like_desktop(qt_path)
@@ -724,7 +710,6 @@ class MasterApp(QMainWindow):
         self.is_waiting_30s = True
         self.btn_start_all.setEnabled(False)
 
-        # 2. Hẹn giờ 30 giây bật TINKER và Tool Khác
         def run_remaining_tools():
             self.is_waiting_30s = False
             self.btn_start_all.setEnabled(True)
@@ -777,7 +762,6 @@ class MasterApp(QMainWindow):
             QMessageBox.information(self, "Thông báo", "Hiện tại không có tool nào đang chạy!")
 
     def watchdog_check_and_recover(self):
-        """Tự động kiểm tra và mở lại tool nếu bị tắt (Kèm Cooldown chống mở đè)"""
         if self.is_waiting_30s or not self.chk_auto_recover.isChecked():
             return
 
@@ -789,7 +773,6 @@ class MasterApp(QMainWindow):
         ]:
             if path and os.path.exists(path):
                 if not is_process_running(path):
-                    # Cooldown 15s tránh spam mở lại liên tục khi app đang load
                     if now - self.last_launch_time.get(name, 0) > 15:
                         self.update_badge_ui(badge, False, is_warning=True, warning_text="BỊ TẮT! ĐANG MỞ LẠI...")
                         self.status_boot_label.setText(f"Cảnh báo: Phát hiện {name} bị tắt! Đang tự động mở lại...")
@@ -833,7 +816,7 @@ class MasterApp(QMainWindow):
             except Exception:
                 pass
 
-            self.status_boot_label.setText("Đã kích hoạt tự khởi động Hub cùng Windows.")
+            self.status_boot_label.setText("Đã bật tự khởi động Hub cùng Windows.")
         else:
             if os.path.exists(bat_file):
                 try:
@@ -853,7 +836,6 @@ class MasterApp(QMainWindow):
     # ================= LOGIC TAB 2: BỨC TƯỜNG GAME =================
 
     def on_tab_changed(self, index):
-        """Khi ở Tab 1 (Auto) thì DỪNG vẽ Wall để CPU về 0%. Sang Tab 2 mới vẽ."""
         if index == 1:
             if self.current_fps > 0 and not self.render_timer.isActive():
                 interval = max(16, int(1000 / self.current_fps))
@@ -863,7 +845,6 @@ class MasterApp(QMainWindow):
             self.render_timer.stop()
 
     def changeEvent(self, event):
-        """Khi ẩn hoặc thu nhỏ App thì dừng render để tiết kiệm CPU"""
         super().changeEvent(event)
         if self.isMinimized():
             self.render_timer.stop()
