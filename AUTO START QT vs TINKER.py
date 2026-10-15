@@ -1,62 +1,80 @@
 import sys
 import os
-import io
-
-# 1. Chống crash ngầm bắt buộc khi dùng PyInstaller --windowed/--noconsole
-if sys.stdout is None:
-    sys.stdout = io.StringIO()
-if sys.stderr is None:
-    sys.stderr = io.StringIO()
-
 import re
 import json
 import subprocess
-import time
 import winreg
 import ctypes
-import traceback
+from ctypes import wintypes
+import psutil
 
-# 2. Bẫy lỗi Crash ngay từ đầu
-def show_fatal_error(msg):
+# 1. Kiểm tra và tự nâng quyền Administrator an toàn
+def is_admin():
     try:
-        ctypes.windll.user32.MessageBoxW(0, str(msg), "Lỗi Khởi Động", 0x10)
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except Exception:
+        return False
+
+if not is_admin():
+    try:
+        if getattr(sys, 'frozen', False):
+            exe_path = sys.executable
+            args = ""
+        else:
+            exe_path = sys.executable
+            args = f'"{os.path.abspath(__file__)}"'
+        
+        ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe_path, args, None, 1)
+        if ret > 32:
+            sys.exit(0)
     except Exception:
         pass
 
-try:
-    import psutil
-    import win32gui
-    import win32ui
-    import win32con
-    from PyQt5.QtWidgets import (
-        QApplication, QMainWindow, QWidget, QVBoxLayout, 
-        QHBoxLayout, QGridLayout, QPushButton, QLabel, QLineEdit, 
-        QFileDialog, QCheckBox, QFrame, QMessageBox,
-        QTabWidget, QScrollArea, QComboBox, QSlider
-    )
-    from PyQt5.QtCore import Qt, QTimer
-    from PyQt5.QtGui import QImage, QPixmap, QPainter, QIcon
-except Exception as e:
-    show_fatal_error(f"Không thể tải thư viện:\n{traceback.format_exc()}")
-    sys.exit(1)
+# 2. Thư viện đồ họa Windows
+import win32gui
+import win32ui
+import win32con
+import win32console
 
-# Thư mục chứa cấu hình nằm cố định cùng file exe thực tế
-def get_base_dir():
+try:
+    hwnd_console = win32console.GetConsoleWindow()
+    if hwnd_console:
+        win32gui.ShowWindow(hwnd_console, win32con.SW_HIDE)
+except Exception:
+    pass
+
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, 
+    QHBoxLayout, QGridLayout, QPushButton, QLabel, QLineEdit, 
+    QFileDialog, QCheckBox, QFrame, QMessageBox,
+    QTabWidget, QScrollArea, QComboBox, QSlider, QSizePolicy
+)
+from PyQt5.QtCore import Qt, QTimer, QRect, QPoint
+from PyQt5.QtGui import QImage, QPixmap, QPainter, QIcon
+
+# Xác định đường dẫn file cấu hình luôn nằm cạnh file .exe thực tế
+def get_app_dir():
     if getattr(sys, 'frozen', False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
-CONFIG_PATH = os.path.join(get_base_dir(), "boot_config.json")
-REG_STARTUP_KEY = "Mir4_Master_Hub_PhamHung"
+CONFIG_FILE = os.path.join(get_app_dir(), "boot_config.json")
+REG_APP_NAME = "Mir4_Master_Hub_PhamHung"
 
 
-def is_process_running(exe_path):
-    if not exe_path or not os.path.exists(exe_path):
+def get_current_exe_path():
+    if getattr(sys, 'frozen', False):
+        return sys.executable
+    return os.path.abspath(__file__)
+
+
+def is_process_running_by_path(target_path):
+    if not target_path or not os.path.exists(target_path):
         return False
-    target_abs = os.path.abspath(exe_path).lower()
-    target_name = os.path.basename(exe_path).lower()
+    target_name = os.path.basename(target_path).lower()
+    target_abs = os.path.abspath(target_path).lower()
     try:
-        for proc in psutil.process_iter(['exe', 'name']):
+        for proc in psutil.process_iter(['name', 'exe']):
             try:
                 p_exe = proc.info.get('exe')
                 if p_exe and os.path.abspath(p_exe).lower() == target_abs:
@@ -71,53 +89,8 @@ def is_process_running(exe_path):
     return False
 
 
-def kill_process_by_path(exe_path):
-    if not exe_path or not os.path.exists(exe_path):
-        return False
-    target_abs = os.path.abspath(exe_path).lower()
-    target_name = os.path.basename(exe_path).lower()
-    killed = False
-    try:
-        for proc in psutil.process_iter(['exe', 'name']):
-            try:
-                p_exe = proc.info.get('exe')
-                p_name = proc.info.get('name')
-                if (p_exe and os.path.abspath(p_exe).lower() == target_abs) or (p_name and p_name.lower() == target_name):
-                    proc.kill()
-                    killed = True
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-    except Exception:
-        pass
-    return killed
-
-
-def launch_like_desktop(exe_path):
-    if not exe_path or not os.path.exists(exe_path):
-        return False
-    abs_path = os.path.abspath(exe_path)
-    working_dir = os.path.dirname(abs_path)
-    try:
-        os.chdir(working_dir)
-        os.startfile(abs_path)
-        return True
-    except Exception:
-        pass
-    try:
-        ret = ctypes.windll.shell32.ShellExecuteW(None, "open", abs_path, None, working_dir, 1)
-        if ret > 32:
-            return True
-    except Exception:
-        pass
-    try:
-        subprocess.Popen([abs_path], cwd=working_dir, shell=False)
-        return True
-    except Exception:
-        return False
-
-
 # ==========================================================
-#                   MODULE TAB 2: BỨC TƯỜNG GAME
+#                   MODULE MIR4 WALL MANAGER
 # ==========================================================
 
 def capture_window_pixmap(hwnd, target_w, target_h):
@@ -153,6 +126,7 @@ def capture_window_pixmap(hwnd, target_w, target_h):
 
         bmpinfo = saveBitMap.GetInfo()
         bmpstr = saveBitMap.GetBitmapBits(True)
+
         img = QImage(bmpstr, bmpinfo['bmWidth'], bmpinfo['bmHeight'], QImage.Format_ARGB32)
 
         win32gui.DeleteObject(saveBitMap.GetHandle())
@@ -231,14 +205,14 @@ class ThumbnailCard(QFrame):
 
 
 # ==========================================================
-#                   CỬA SỔ CHÍNH MASTER APP
+#                   CỬA SỔ CHÍNH TỔNG HỢP (MASTER APP)
 # ==========================================================
 
 class MasterApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Mir4 Master Hub - Quản Lý Auto & Bức Tường Game [PHAMHUNG]")
-        self.resize(1340, 860)
+        self.setWindowTitle("Mir4 Master Hub - Auto Launcher & Wall Manager [PHAMHUNG]")
+        self.resize(1340, 850)
         self.setStyleSheet("""
             QMainWindow { background-color: #121214; }
             QWidget { color: #ececed; font-family: Segoe UI, sans-serif; }
@@ -261,46 +235,49 @@ class MasterApp(QMainWindow):
         if os.path.exists("app_icon.ico"):
             self.setWindowIcon(QIcon("app_icon.ico"))
 
-        # Cấu hình lưu trữ
+        # Cấu hình QT & Tinker
         self.config = {
             "qt_path": "",
             "tinker_path": "",
-            "other_path": "",
-            "auto_start_tools": True,
-            "auto_recover_crash": True
+            "auto_start_apps": True,
+            "auto_restart_crash": True,
+            "delay_seconds": 2
         }
         self.load_config()
 
-        self.is_waiting_30s = False
-        self.last_launch_time = {}
-
+        # Biến điều khiển Wall Manager
         self.current_cols = 4
         self.cards = {}
         self.auto_scale = True
         self.fixed_w = 320
         self.fixed_h = 180
-        self.current_fps = 30
 
         self.init_ui()
 
-        # Timers Tab 2 (Bức Tường Game)
+        # Timer cập nhật khung hình cho Wall
         self.render_timer = QTimer(self)
         self.render_timer.timeout.connect(self.update_frames)
+        self.render_timer.start(33)
 
+        # Timer quét phát hiện game mới mở/đóng
         self.scan_timer = QTimer(self)
         self.scan_timer.timeout.connect(self.scan_windows)
-        self.scan_timer.start(5000)
+        self.scan_timer.start(3000)
 
-        # Timer Watchdog Tab 1
+        # Timer Watchdog cho QT & TINKER (quét mỗi 4 giây)
         self.watchdog_timer = QTimer(self)
-        self.watchdog_timer.timeout.connect(self.watchdog_check_and_recover)
-        self.watchdog_timer.start(5000)
+        self.watchdog_timer.timeout.connect(self.check_and_recover_apps)
+        self.watchdog_timer.start(4000)
 
-        QTimer.singleShot(300, self.check_app_status_ui)
+        # Khởi chạy ban đầu
+        QTimer.singleShot(200, self.check_app_status_ui)
+        QTimer.singleShot(500, self.scan_windows)
 
-        if self.config.get("auto_start_tools", True):
-            self.status_boot_label.setText("Tự động kích hoạt: Khởi động QT trước, chờ 30s kích hoạt 2 tool còn lại...")
-            QTimer.singleShot(1500, self.start_sequence_flow)
+        # Tự khởi chạy QT trước, sau đó chờ 30 giây để bật TINKER
+        if self.config.get("auto_start_apps", True):
+            delay_ms = self.config.get("delay_seconds", 2) * 1000
+            self.status_boot_label.setText(f"Tự động chạy QT sau {self.config.get('delay_seconds', 2)}s...")
+            QTimer.singleShot(delay_ms, self.auto_start_both_silent)
 
     def init_ui(self):
         central_widget = QWidget()
@@ -310,180 +287,132 @@ class MasterApp(QMainWindow):
         main_layout.setSpacing(8)
 
         self.tabs = QTabWidget()
-        self.tabs.currentChanged.connect(self.on_tab_changed)
 
-        # ================= TAB 1: QUẢN LÝ AUTO =================
+        # ================= TAB 1: QUẢN LÝ AUTO (QT & TINKER) =================
         tab_boot = QWidget()
         tab_boot_layout = QVBoxLayout(tab_boot)
-        tab_boot_layout.setContentsMargins(20, 15, 20, 15)
-        tab_boot_layout.setSpacing(12)
+        tab_boot_layout.setContentsMargins(20, 20, 20, 20)
+        tab_boot_layout.setSpacing(15)
 
-        box_frame = QFrame()
-        box_frame.setStyleSheet("background-color: #1a1a1e; border: 1px solid #2e2e38; border-radius: 8px;")
-        box_layout = QVBoxLayout(box_frame)
-        box_layout.setContentsMargins(18, 12, 18, 12)
-        box_layout.setSpacing(10)
+        boot_box = QFrame()
+        boot_box.setStyleSheet("background-color: #1a1a1e; border: 1px solid #2e2e38; border-radius: 8px;")
+        boot_box_layout = QVBoxLayout(boot_box)
+        boot_box_layout.setContentsMargins(20, 15, 20, 15)
+        boot_box_layout.setSpacing(12)
 
-        # 1. Tool QT
-        h_qt_head = QHBoxLayout()
-        lbl_qt = QLabel("1. Phần mềm QT (Ưu tiên chạy trước):")
-        lbl_qt.setStyleSheet("border: none; font-weight: bold; color: #00e5ff; font-size: 13px;")
-        h_qt_head.addWidget(lbl_qt)
-        self.badge_qt = QLabel("⚪ Đang kiểm tra...")
-        self.badge_qt.setStyleSheet("border: none; font-size: 11px; font-weight: bold; color: #888;")
-        h_qt_head.addWidget(self.badge_qt)
-        h_qt_head.addStretch()
-        box_layout.addLayout(h_qt_head)
+        # 1. QT
+        h_qt_title = QHBoxLayout()
+        lbl_qt = QLabel("1. Phần mềm QT:")
+        lbl_qt.setStyleSheet("border: none; font-weight: bold; color: #00e5ff; font-size: 14px;")
+        h_qt_title.addWidget(lbl_qt)
+        self.status_qt_badge = QLabel("⚪ Đang kiểm tra...")
+        self.status_qt_badge.setStyleSheet("border: none; font-size: 11px; font-weight: bold; color: #888;")
+        h_qt_title.addWidget(self.status_qt_badge)
+        h_qt_title.addStretch()
+        boot_box_layout.addLayout(h_qt_title)
 
         h_qt = QHBoxLayout()
         self.txt_qt = QLineEdit(self.config.get("qt_path", ""))
         self.txt_qt.setPlaceholderText("Đường dẫn file QT (.exe)...")
         self.txt_qt.setStyleSheet("background-color: #242429; color: white; border: 1px solid #444; border-radius: 4px; padding: 6px;")
-        self.txt_qt.textChanged.connect(self.save_config)
+        self.txt_qt.textChanged.connect(self.save_settings)
         h_qt.addWidget(self.txt_qt)
 
         btn_browse_qt = QPushButton("Chọn file...")
-        btn_browse_qt.setFixedHeight(30)
-        btn_browse_qt.setStyleSheet("background-color: #383842; color: white; border-radius: 4px; padding: 0 10px;")
-        btn_browse_qt.clicked.connect(lambda: self.browse_target_file(self.txt_qt))
+        btn_browse_qt.setFixedHeight(32)
+        btn_browse_qt.setStyleSheet("background-color: #383842; color: white; border-radius: 4px; padding: 0 12px;")
+        btn_browse_qt.clicked.connect(lambda: self.browse_file(self.txt_qt))
         h_qt.addWidget(btn_browse_qt)
 
         btn_run_qt = QPushButton("Chạy QT")
-        btn_run_qt.setFixedHeight(30)
-        btn_run_qt.setStyleSheet("background-color: #007acc; color: white; font-weight: bold; border-radius: 4px; padding: 0 12px;")
-        btn_run_qt.clicked.connect(lambda: self.manual_launch_single(self.txt_qt.text().strip(), "QT"))
+        btn_run_qt.setFixedHeight(32)
+        btn_run_qt.setStyleSheet("background-color: #007acc; color: white; font-weight: bold; border-radius: 4px; padding: 0 15px;")
+        btn_run_qt.clicked.connect(lambda: self.on_manual_launch_single(self.txt_qt.text().strip(), "QT"))
         h_qt.addWidget(btn_run_qt)
-        box_layout.addLayout(h_qt)
+        boot_box_layout.addLayout(h_qt)
 
-        # 2. Tool TINKER
-        h_tinker_head = QHBoxLayout()
-        lbl_tinker = QLabel("2. Phần mềm TINKER (Chạy sau QT 30s):")
-        lbl_tinker.setStyleSheet("border: none; font-weight: bold; color: #00e676; font-size: 13px;")
-        h_tinker_head.addWidget(lbl_tinker)
-        self.badge_tinker = QLabel("⚪ Đang kiểm tra...")
-        self.badge_tinker.setStyleSheet("border: none; font-size: 11px; font-weight: bold; color: #888;")
-        h_tinker_head.addWidget(self.badge_tinker)
-        h_tinker_head.addStretch()
-        box_layout.addLayout(h_tinker_head)
+        # 2. TINKER
+        h_tinker_title = QHBoxLayout()
+        lbl_tinker = QLabel("2. Phần mềm TINKER (Bật sau QT 30s):")
+        lbl_tinker.setStyleSheet("border: none; font-weight: bold; color: #00e676; font-size: 14px;")
+        h_tinker_title.addWidget(lbl_tinker)
+        self.status_tinker_badge = QLabel("⚪ Đang kiểm tra...")
+        self.status_tinker_badge.setStyleSheet("border: none; font-size: 11px; font-weight: bold; color: #888;")
+        h_tinker_title.addWidget(self.status_tinker_badge)
+        h_tinker_title.addStretch()
+        boot_box_layout.addLayout(h_tinker_title)
 
         h_tinker = QHBoxLayout()
         self.txt_tinker = QLineEdit(self.config.get("tinker_path", ""))
         self.txt_tinker.setPlaceholderText("Đường dẫn file TINKER (.exe)...")
-        self.txt_tinker.setStyleSheet("background-color: #242429; color: white; border: 1px solid #444; border-radius: 4px; padding: 6px;")
-        self.txt_tinker.textChanged.connect(self.save_config)
+        self.txt_tinker.setStyleSheet("background-color: #242429; color: white; border-radius: 4px; border: 1px solid #444; padding: 6px;")
+        self.txt_tinker.textChanged.connect(self.save_settings)
         h_tinker.addWidget(self.txt_tinker)
 
         btn_browse_tinker = QPushButton("Chọn file...")
-        btn_browse_tinker.setFixedHeight(30)
-        btn_browse_tinker.setStyleSheet("background-color: #383842; color: white; border-radius: 4px; padding: 0 10px;")
-        btn_browse_tinker.clicked.connect(lambda: self.browse_target_file(self.txt_tinker))
+        btn_browse_tinker.setFixedHeight(32)
+        btn_browse_tinker.setStyleSheet("background-color: #383842; color: white; border-radius: 4px; padding: 0 12px;")
+        btn_browse_tinker.clicked.connect(lambda: self.browse_file(self.txt_tinker))
         h_tinker.addWidget(btn_browse_tinker)
 
         btn_run_tinker = QPushButton("Chạy Tinker")
-        btn_run_tinker.setFixedHeight(30)
-        btn_run_tinker.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; border-radius: 4px; padding: 0 12px;")
-        btn_run_tinker.clicked.connect(lambda: self.manual_launch_single(self.txt_tinker.text().strip(), "TINKER"))
+        btn_run_tinker.setFixedHeight(32)
+        btn_run_tinker.setStyleSheet("background-color: #2e7d32; color: white; font-weight: bold; border-radius: 4px; padding: 0 15px;")
+        btn_run_tinker.clicked.connect(lambda: self.on_manual_launch_single(self.txt_tinker.text().strip(), "TINKER"))
         h_tinker.addWidget(btn_run_tinker)
-        box_layout.addLayout(h_tinker)
+        boot_box_layout.addLayout(h_tinker)
 
-        # 3. Tool Khác
-        h_other_head = QHBoxLayout()
-        lbl_other = QLabel("3. Tool Khác (Chạy cùng lúc với Tinker sau 30s):")
-        lbl_other.setStyleSheet("border: none; font-weight: bold; color: #e040fb; font-size: 13px;")
-        h_other_head.addWidget(lbl_other)
-        self.badge_other = QLabel("⚪ Đang kiểm tra...")
-        self.badge_other.setStyleSheet("border: none; font-size: 11px; font-weight: bold; color: #888;")
-        h_other_head.addWidget(self.badge_other)
-        h_other_head.addStretch()
-        box_layout.addLayout(h_other_head)
+        tab_boot_layout.addWidget(boot_box)
 
-        h_other = QHBoxLayout()
-        self.txt_other = QLineEdit(self.config.get("other_path", ""))
-        self.txt_other.setPlaceholderText("Đường dẫn Tool thứ 3 (.exe)...")
-        self.txt_other.setStyleSheet("background-color: #242429; color: white; border: 1px solid #444; border-radius: 4px; padding: 6px;")
-        self.txt_other.textChanged.connect(self.save_config)
-        h_other.addWidget(self.txt_other)
-
-        btn_browse_other = QPushButton("Chọn file...")
-        btn_browse_other.setFixedHeight(30)
-        btn_browse_other.setStyleSheet("background-color: #383842; color: white; border-radius: 4px; padding: 0 10px;")
-        btn_browse_other.clicked.connect(lambda: self.browse_target_file(self.txt_other))
-        h_other.addWidget(btn_browse_other)
-
-        btn_run_other = QPushButton("Chạy Tool Khác")
-        btn_run_other.setFixedHeight(30)
-        btn_run_other.setStyleSheet("background-color: #7b1fa2; color: white; font-weight: bold; border-radius: 4px; padding: 0 12px;")
-        btn_run_other.clicked.connect(lambda: self.manual_launch_single(self.txt_other.text().strip(), "Tool Khác"))
-        h_other.addWidget(btn_run_other)
-        box_layout.addLayout(h_other)
-
-        tab_boot_layout.addWidget(box_frame)
-
-        # Tùy chọn tự động
+        # Tùy chọn khởi chạy & Watchdog
         opts_layout = QVBoxLayout()
-        opts_layout.setSpacing(6)
+        opts_layout.setSpacing(8)
 
-        h_check1 = QHBoxLayout()
-        self.chk_startup = QCheckBox("Tự khởi động App Hub cùng Windows")
-        self.chk_startup.setChecked(self.is_startup_registered())
-        self.chk_startup.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 13px;")
-        self.chk_startup.stateChanged.connect(self.toggle_windows_startup)
-        h_check1.addWidget(self.chk_startup)
+        h_opts1 = QHBoxLayout()
+        self.chk_windows_startup = QCheckBox("Tự khởi động toàn bộ Hub cùng Windows")
+        self.chk_windows_startup.setChecked(self.is_startup_enabled())
+        self.chk_windows_startup.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 13px;")
+        self.chk_windows_startup.stateChanged.connect(self.toggle_startup)
+        h_opts1.addWidget(self.chk_windows_startup)
 
-        self.chk_auto_start = QCheckBox("Tự khởi động các Tool đã lưu (QT trước, 30s sau mở 2 Tool còn lại)")
-        self.chk_auto_start.setChecked(self.config.get("auto_start_tools", True))
-        self.chk_auto_start.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 13px;")
-        self.chk_auto_start.stateChanged.connect(self.save_config)
-        h_check1.addWidget(self.chk_auto_start)
-        opts_layout.addLayout(h_check1)
+        self.chk_auto_launch_tools = QCheckBox("Tự bật 2 Tool khi mở App (QT trước 30s)")
+        self.chk_auto_launch_tools.setChecked(self.config.get("auto_start_apps", True))
+        self.chk_auto_launch_tools.setStyleSheet("color: #ffffff; font-weight: bold; font-size: 13px;")
+        self.chk_auto_launch_tools.stateChanged.connect(self.save_settings)
+        h_opts1.addWidget(self.chk_auto_launch_tools)
+        opts_layout.addLayout(h_opts1)
 
-        self.chk_auto_recover = QCheckBox("🛡️ Giám sát & Tự động mở lại Tool nếu 1 trong các Tool bị tắt")
-        self.chk_auto_recover.setChecked(self.config.get("auto_recover_crash", True))
-        self.chk_auto_recover.setStyleSheet("color: #ffaa00; font-weight: bold; font-size: 13px;")
-        self.chk_auto_recover.stateChanged.connect(self.save_config)
-        opts_layout.addWidget(self.chk_auto_recover)
+        self.chk_auto_restart = QCheckBox("🛡️ Giám sát & Tự động bật lại khi QT hoặc TINKER bị Tắt / Crash")
+        self.chk_auto_restart.setChecked(self.config.get("auto_restart_crash", True))
+        self.chk_auto_restart.setStyleSheet("color: #ffaa00; font-weight: bold; font-size: 13px;")
+        self.chk_auto_restart.stateChanged.connect(self.save_settings)
+        opts_layout.addWidget(self.chk_auto_restart)
 
         tab_boot_layout.addLayout(opts_layout)
 
-        # 2 Nút: Khởi chạy tất cả / Dừng tất cả
-        h_btns = QHBoxLayout()
-        h_btns.setSpacing(12)
-
-        self.btn_start_all = QPushButton("🚀 KHỞI CHẠY TẤT CẢ TOOL (QT TRƯỚC 30S)")
-        self.btn_start_all.setFixedHeight(42)
-        self.btn_start_all.setStyleSheet("""
+        # Nút khởi chạy cả 2 tool
+        self.btn_launch_both = QPushButton("🚀 KHỞI CHẠY CẢ 2 PHẦN MỀM (QT TRƯỚC 30S)")
+        self.btn_launch_both.setFixedHeight(45)
+        self.btn_launch_both.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #ff6600, stop:1 #ff8533);
-                color: white; font-size: 13px; font-weight: bold; border-radius: 6px;
+                color: white; font-size: 14px; font-weight: bold; border-radius: 6px;
             }
             QPushButton:hover { background: #ff944d; }
         """)
-        self.btn_start_all.clicked.connect(self.on_btn_start_all_clicked)
-        h_btns.addWidget(self.btn_start_all)
+        self.btn_launch_both.clicked.connect(self.on_manual_launch_both)
+        tab_boot_layout.addWidget(self.btn_launch_both)
 
-        self.btn_stop_all = QPushButton("🛑 DỪNG TẤT CẢ TOOL")
-        self.btn_stop_all.setFixedHeight(42)
-        self.btn_stop_all.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #c62828, stop:1 #e53935);
-                color: white; font-size: 13px; font-weight: bold; border-radius: 6px;
-            }
-            QPushButton:hover { background: #ef5350; }
-        """)
-        self.btn_stop_all.clicked.connect(self.on_btn_stop_all_clicked)
-        h_btns.addWidget(self.btn_stop_all)
-
-        tab_boot_layout.addLayout(h_btns)
-
-        self.status_boot_label = QLabel("Hệ thống quản lý Auto đang sẵn sàng.")
+        self.status_boot_label = QLabel("Hệ thống giám sát đang chạy ngầm.")
         self.status_boot_label.setAlignment(Qt.AlignCenter)
         self.status_boot_label.setStyleSheet("color: #00e676; font-size: 13px; font-weight: bold;")
         tab_boot_layout.addWidget(self.status_boot_label)
 
         tab_boot_layout.addStretch()
-        self.tabs.addTab(tab_boot, "⚙️ QUẢN LÝ AUTO")
 
-        # ================= TAB 2: TƯỜNG GAME =================
+        self.tabs.addTab(tab_boot, "⚙️ QUẢN LÝ AUTO (QT & TINKER)")
+
+        # ================= TAB 2: BỨC TƯỜNG GAME =================
         tab_wall = QWidget()
         tab_wall_layout = QVBoxLayout(tab_wall)
         tab_wall_layout.setContentsMargins(5, 5, 5, 5)
@@ -493,11 +422,11 @@ class MasterApp(QMainWindow):
         toolbar.setSpacing(12)
 
         self.refresh_btn = QPushButton("Làm mới ngay (F5)")
-        self.refresh_btn.setFixedHeight(30)
+        self.refresh_btn.setFixedHeight(32)
         self.refresh_btn.setStyleSheet("""
             QPushButton {
                 background-color: #ff6600; color: white; font-weight: bold;
-                padding: 0 14px; border-radius: 4px;
+                padding: 0 16px; border-radius: 4px;
             }
             QPushButton:hover { background-color: #ff8533; }
         """)
@@ -506,7 +435,7 @@ class MasterApp(QMainWindow):
 
         toolbar.addWidget(QLabel("Độ phân giải:"))
         self.res_combo = QComboBox()
-        self.res_combo.setFixedHeight(28)
+        self.res_combo.setFixedHeight(30)
         self.res_combo.setStyleSheet("background-color: #242429; color: white; border-radius: 4px; padding: 2px 8px;")
         self.res_options = {
             "Tự động (Co giãn theo App)": None,
@@ -524,7 +453,7 @@ class MasterApp(QMainWindow):
 
         toolbar.addWidget(QLabel("Số cột:"))
         self.col_combo = QComboBox()
-        self.col_combo.setFixedHeight(28)
+        self.col_combo.setFixedHeight(30)
         self.col_combo.setStyleSheet("background-color: #242429; color: white; border-radius: 4px; padding: 2px 8px;")
         for c in range(1, 9):
             self.col_combo.addItem(f"{c} Cột", c)
@@ -536,7 +465,7 @@ class MasterApp(QMainWindow):
         self.fps_slider = QSlider(Qt.Horizontal)
         self.fps_slider.setRange(0, 60)
         self.fps_slider.setValue(30)
-        self.fps_slider.setFixedWidth(150)
+        self.fps_slider.setFixedWidth(160)
         self.fps_slider.setStyleSheet("""
             QSlider::groove:horizontal { height: 6px; background: #2b2b36; border-radius: 3px; }
             QSlider::sub-page:horizontal { background: #ff6600; border-radius: 3px; }
@@ -549,7 +478,7 @@ class MasterApp(QMainWindow):
         toolbar.addWidget(self.fps_slider)
 
         self.fps_value_label = QLabel("30 FPS")
-        self.fps_value_label.setStyleSheet("color: #ffaa00; font-weight: bold; min-width: 75px;")
+        self.fps_value_label.setStyleSheet("color: #ffaa00; font-weight: bold; min-width: 80px;")
         toolbar.addWidget(self.fps_value_label)
 
         toolbar.addStretch()
@@ -573,7 +502,7 @@ class MasterApp(QMainWindow):
         self.scroll_area.setWidget(self.scroll_widget)
         tab_wall_layout.addWidget(self.scroll_area, 1)
 
-        self.tabs.addTab(tab_wall, "🖥️ TƯỜNG GAME")
+        self.tabs.addTab(tab_wall, "🖥️ BỨC TƯỜNG GAME (MIR4 WALL)")
 
         main_layout.addWidget(self.tabs, 1)
 
@@ -621,245 +550,9 @@ class MasterApp(QMainWindow):
         ad_layout.addWidget(gold_badge)
         main_layout.addWidget(self.ad_banner)
 
-    # ================= LOGIC QUẢN LÝ AUTO =================
-
-    def browse_target_file(self, line_edit):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Chọn file ứng dụng", "", "Executable Files (*.exe *.bat *.py);;All Files (*.*)"
-        )
-        if path:
-            norm_path = os.path.normpath(path)
-            line_edit.setText(norm_path)
-            self.save_config()
-            self.check_app_status_ui()
-
-    def load_config(self):
-        if os.path.exists(CONFIG_PATH):
-            try:
-                with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    if isinstance(data, dict):
-                        self.config.update(data)
-            except Exception:
-                pass
-
-    def save_config(self):
-        try:
-            self.config["qt_path"] = self.txt_qt.text().strip()
-            self.config["tinker_path"] = self.txt_tinker.text().strip()
-            self.config["other_path"] = self.txt_other.text().strip()
-            self.config["auto_start_tools"] = self.chk_auto_start.isChecked()
-            self.config["auto_recover_crash"] = self.chk_auto_recover.isChecked()
-
-            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-                json.dump(self.config, f, ensure_ascii=False, indent=4)
-        except Exception:
-            pass
-
-    def update_badge_ui(self, badge, is_on, is_warning=False, warning_text=""):
-        if is_warning:
-            badge.setText(f"⚠️ {warning_text}")
-            badge.setStyleSheet("border: none; font-size: 11px; font-weight: bold; color: #ffab00;")
-        elif is_on:
-            badge.setText("🟢 ĐANG CHẠY (ONLINE)")
-            badge.setStyleSheet("border: none; font-size: 11px; font-weight: bold; color: #00e676;")
-        else:
-            badge.setText("🔴 ĐÃ DỪNG (OFFLINE)")
-            badge.setStyleSheet("border: none; font-size: 11px; font-weight: bold; color: #ff5252;")
-
-    def check_app_status_ui(self):
-        qt_on = is_process_running(self.txt_qt.text().strip())
-        self.update_badge_ui(self.badge_qt, qt_on)
-
-        tinker_on = is_process_running(self.txt_tinker.text().strip())
-        self.update_badge_ui(self.badge_tinker, tinker_on)
-
-        other_on = is_process_running(self.txt_other.text().strip())
-        self.update_badge_ui(self.badge_other, other_on)
-
-        return qt_on, tinker_on, other_on
-
-    def manual_launch_single(self, path, name):
-        self.save_config()
-        if not path or not os.path.exists(path):
-            QMessageBox.warning(self, "Lỗi", f"Đường dẫn file {name} không tồn tại!")
-            return
-
-        if is_process_running(path):
-            QMessageBox.information(self, "Thông báo", f"{name} đã được khởi chạy từ trước!")
-            return
-
-        if launch_like_desktop(path):
-            self.last_launch_time[name] = time.time()
-            self.status_boot_label.setText(f"Khởi chạy {name} thành công.")
-            QMessageBox.information(self, "Thành công", f"Khởi chạy {name} thành công!")
-            QTimer.singleShot(1500, self.check_app_status_ui)
-        else:
-            QMessageBox.critical(self, "Lỗi", f"Không thể khởi động file {name}!")
-
-    def start_sequence_flow(self):
-        qt_path = self.txt_qt.text().strip()
-        tinker_path = self.txt_tinker.text().strip()
-        other_path = self.txt_other.text().strip()
-
-        if qt_path and os.path.exists(qt_path):
-            if not is_process_running(qt_path):
-                launch_like_desktop(qt_path)
-                self.last_launch_time["QT"] = time.time()
-                self.status_boot_label.setText("Đã bật QT. Đang đếm lùi 30 giây để bật TINKER và Tool Khác...")
-            else:
-                self.status_boot_label.setText("QT đã hoạt động. Chờ 30 giây kích hoạt 2 tool còn lại...")
-        else:
-            self.status_boot_label.setText("Chưa cài đường dẫn QT. Chờ 30 giây kiểm tra các tool còn lại...")
-
-        self.is_waiting_30s = True
-        self.btn_start_all.setEnabled(False)
-
-        def run_remaining_tools():
-            self.is_waiting_30s = False
-            self.btn_start_all.setEnabled(True)
-
-            launched_names = []
-            if tinker_path and os.path.exists(tinker_path) and not is_process_running(tinker_path):
-                launch_like_desktop(tinker_path)
-                self.last_launch_time["TINKER"] = time.time()
-                launched_names.append("TINKER")
-
-            if other_path and os.path.exists(other_path) and not is_process_running(other_path):
-                launch_like_desktop(other_path)
-                self.last_launch_time["Tool Khác"] = time.time()
-                launched_names.append("Tool Khác")
-
-            if launched_names:
-                msg = f"Đã khởi chạy: {', '.join(launched_names)} sau 30 giây!"
-            else:
-                msg = "Hoàn tất chu kỳ 30 giây. Các tool đã ở trạng thái chạy!"
-            self.status_boot_label.setText(msg)
-            self.check_app_status_ui()
-
-        QTimer.singleShot(30000, run_remaining_tools)
-
-    def on_btn_start_all_clicked(self):
-        self.save_config()
-        self.start_sequence_flow()
-        QMessageBox.information(
-            self, "Khởi chạy theo chu kỳ",
-            "Đã gửi lệnh bật QT!\nHệ thống sẽ đếm lùi đúng 30 giây để tiếp tục bật TINKER và Tool Khác."
-        )
-
-    def on_btn_stop_all_clicked(self):
-        stopped = []
-        for path, name in [
-            (self.txt_qt.text().strip(), "QT"),
-            (self.txt_tinker.text().strip(), "TINKER"),
-            (self.txt_other.text().strip(), "Tool Khác")
-        ]:
-            if path and is_process_running(path):
-                if kill_process_by_path(path):
-                    stopped.append(name)
-
-        self.check_app_status_ui()
-        if stopped:
-            self.status_boot_label.setText(f"Đã dừng: {', '.join(stopped)}")
-            QMessageBox.information(self, "Thông báo", f"Đã dừng các tiến trình: {', '.join(stopped)}")
-        else:
-            self.status_boot_label.setText("Không có tool nào đang chạy để dừng.")
-            QMessageBox.information(self, "Thông báo", "Hiện tại không có tool nào đang chạy!")
-
-    def watchdog_check_and_recover(self):
-        if self.is_waiting_30s or not self.chk_auto_recover.isChecked():
-            return
-
-        now = time.time()
-        for path, name, badge in [
-            (self.txt_qt.text().strip(), "QT", self.badge_qt),
-            (self.txt_tinker.text().strip(), "TINKER", self.badge_tinker),
-            (self.txt_other.text().strip(), "Tool Khác", self.badge_other)
-        ]:
-            if path and os.path.exists(path):
-                if not is_process_running(path):
-                    if now - self.last_launch_time.get(name, 0) > 15:
-                        self.update_badge_ui(badge, False, is_warning=True, warning_text="BỊ TẮT! ĐANG MỞ LẠI...")
-                        self.status_boot_label.setText(f"Cảnh báo: Phát hiện {name} bị tắt! Đang tự động mở lại...")
-                        launch_like_desktop(path)
-                        self.last_launch_time[name] = now
-
-    # ================= KHỞI ĐỘNG CÙNG WINDOWS =================
-
-    def get_startup_bat_path(self):
-        startup_dir = os.path.join(os.environ["APPDATA"], r"Microsoft\Windows\Start Menu\Programs\Startup")
-        return os.path.join(startup_dir, "Mir4_Master_Hub.bat")
-
-    def is_startup_registered(self):
-        if os.path.exists(self.get_startup_bat_path()):
-            return True
-        try:
-            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_READ)
-            winreg.QueryValueEx(key, REG_STARTUP_KEY)
-            winreg.CloseKey(key)
-            return True
-        except Exception:
-            return False
-
-    def toggle_windows_startup(self, state):
-        target_exe = sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)
-        target_dir = os.path.dirname(os.path.abspath(target_exe))
-        bat_file = self.get_startup_bat_path()
-        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
-
-        if state == Qt.Checked:
-            try:
-                with open(bat_file, "w", encoding="utf-8") as f:
-                    f.write(f'@echo off\ncd /d "{target_dir}"\nstart "" "{target_exe}"\n')
-            except Exception:
-                pass
-
-            try:
-                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
-                winreg.SetValueEx(key, REG_STARTUP_KEY, 0, winreg.REG_SZ, f'"{target_exe}"')
-                winreg.CloseKey(key)
-            except Exception:
-                pass
-
-            self.status_boot_label.setText("Đã bật tự khởi động Hub cùng Windows.")
-        else:
-            if os.path.exists(bat_file):
-                try:
-                    os.remove(bat_file)
-                except Exception:
-                    pass
-
-            try:
-                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
-                winreg.DeleteValue(key, REG_STARTUP_KEY)
-                winreg.CloseKey(key)
-            except Exception:
-                pass
-
-            self.status_boot_label.setText("Đã tắt tự khởi động Hub cùng Windows.")
-
-    # ================= LOGIC TAB 2: BỨC TƯỜNG GAME =================
-
-    def on_tab_changed(self, index):
-        if index == 1:
-            if self.current_fps > 0 and not self.render_timer.isActive():
-                interval = max(16, int(1000 / self.current_fps))
-                self.render_timer.start(interval)
-            self.scan_windows()
-        else:
-            self.render_timer.stop()
-
-    def changeEvent(self, event):
-        super().changeEvent(event)
-        if self.isMinimized():
-            self.render_timer.stop()
-        elif self.isVisible() and self.tabs.currentIndex() == 1 and self.current_fps > 0:
-            if not self.render_timer.isActive():
-                interval = max(16, int(1000 / self.current_fps))
-                self.render_timer.start(interval)
+    # ================= LOGIC MIR4 WALL MANAGER =================
 
     def on_fps_slider_changed(self, value):
-        self.current_fps = value
         if value == 0:
             self.fps_value_label.setText("0 FPS (Tạm dừng)")
             self.render_timer.stop()
@@ -867,7 +560,7 @@ class MasterApp(QMainWindow):
             self.fps_value_label.setText(f"{value} FPS")
             interval = max(16, int(1000 / value))
             self.render_timer.setInterval(interval)
-            if self.tabs.currentIndex() == 1 and not self.render_timer.isActive():
+            if not self.render_timer.isActive():
                 self.render_timer.start()
 
     def on_resolution_change(self):
@@ -916,9 +609,6 @@ class MasterApp(QMainWindow):
         self.update_card_dimensions()
 
     def scan_windows(self):
-        if self.tabs.currentIndex() != 1:
-            return
-
         found_windows = []
         pattern = re.compile(r"^mir4g\[(\d+)\]", re.IGNORECASE)
 
@@ -976,16 +666,255 @@ class MasterApp(QMainWindow):
             if card_bottom >= view_top and card_top <= view_bottom:
                 card.refresh_screen()
 
+    # ================= LOGIC BOOTLOADER & WATCHDOG =================
 
-# ==========================================================
-#                   ĐIỂM KHỞI CHẠY (MAIN)
-# ==========================================================
+    def show_alert(self, title, message):
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle(title)
+        msg_box.setText(message)
+        msg_box.setIcon(QMessageBox.Information)
+        msg_box.setStandardButtons(QMessageBox.Ok)
+        msg_box.exec_()
+
+    def browse_file(self, target_line_edit):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Chọn file chương trình", "", "Executable Files (*.exe *.bat *.py);;All Files (*.*)"
+        )
+        if file_path:
+            norm_path = os.path.normpath(file_path)
+            target_line_edit.setText(norm_path)
+            self.save_settings()
+            self.check_app_status_ui()
+
+    def load_config(self):
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.config.update(data)
+            except Exception:
+                pass
+
+    def save_settings(self):
+        try:
+            self.config["qt_path"] = self.txt_qt.text().strip()
+            self.config["tinker_path"] = self.txt_tinker.text().strip()
+            self.config["auto_start_apps"] = self.chk_auto_launch_tools.isChecked()
+            self.config["auto_restart_crash"] = self.chk_auto_restart.isChecked()
+            
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.config, f, ensure_ascii=False, indent=4)
+        except Exception:
+            pass
+
+    def execute_binary(self, path):
+        if not path or not os.path.exists(path):
+            return False
+
+        abs_path = os.path.abspath(path)
+        app_dir = os.path.dirname(abs_path)
+
+        try:
+            os.chdir(app_dir)
+            os.startfile(abs_path)
+            return True
+        except Exception:
+            pass
+
+        try:
+            ret = ctypes.windll.shell32.ShellExecuteW(None, "open", abs_path, None, app_dir, 1)
+            if ret > 32:
+                return True
+        except Exception:
+            pass
+
+        try:
+            subprocess.Popen([abs_path], cwd=app_dir, shell=False)
+            return True
+        except Exception:
+            return False
+
+    def on_manual_launch_single(self, path, name):
+        self.save_settings()
+        if not path or not os.path.exists(path):
+            self.show_alert("Lỗi đường dẫn", f"Chưa cấu hình đường dẫn cho {name} hoặc file không tồn tại!")
+            return
+
+        if is_process_running_by_path(path):
+            self.show_alert("Thông báo", f"{name} đã được khởi động")
+            return
+
+        if self.execute_binary(path):
+            self.status_boot_label.setText(f"Khởi chạy {name} thành công.")
+            self.show_alert("Thông báo", f"Khởi chạy {name} thành công")
+            QTimer.singleShot(1500, self.check_app_status_ui)
+        else:
+            self.show_alert("Lỗi", f"Không thể khởi động {name}. Vui lòng thử lại!")
+
+    def on_manual_launch_both(self):
+        self.save_settings()
+        qt_path = self.txt_qt.text().strip()
+        tinker_path = self.txt_tinker.text().strip()
+
+        if not qt_path and not tinker_path:
+            self.show_alert("Thông báo", "Vui lòng chọn đường dẫn cho cả 2 phần mềm trước!")
+            return
+
+        results = []
+
+        # 1. Khởi chạy QT trước
+        if qt_path and os.path.exists(qt_path):
+            if is_process_running_by_path(qt_path):
+                results.append("QT đã được khởi động từ trước.")
+            else:
+                if self.execute_binary(qt_path):
+                    results.append("Khởi chạy QT thành công.")
+                else:
+                    results.append("Lỗi khởi chạy QT.")
+        else:
+            results.append("Đường dẫn QT chưa hợp lệ.")
+
+        # Khóa nút tạm thời để đếm lùi
+        self.btn_launch_both.setEnabled(False)
+        self.status_boot_label.setText("Đã kích hoạt QT. Đang chờ 30 giây để bật TINKER...")
+
+        # 2. Hẹn giờ đúng 30 giây (30000ms) để bật tiếp TINKER
+        def run_second_app():
+            self.btn_launch_both.setEnabled(True)
+            if tinker_path and os.path.exists(tinker_path):
+                if is_process_running_by_path(tinker_path):
+                    tinker_msg = "TINKER đã được khởi động từ trước."
+                else:
+                    if self.execute_binary(tinker_path):
+                        tinker_msg = "Khởi chạy TINKER thành công sau 30s!"
+                    else:
+                        tinker_msg = "Lỗi khởi chạy TINKER."
+            else:
+                tinker_msg = "Đường dẫn TINKER chưa hợp lệ."
+
+            self.status_boot_label.setText(tinker_msg)
+            self.show_alert("Thông báo hệ thống", f"Tiến trình hoàn tất:\n{tinker_msg}")
+            QTimer.singleShot(1500, self.check_app_status_ui)
+
+        current_status = "\n".join(results)
+        self.show_alert(
+            "Tiến trình bắt đầu", 
+            f"{current_status}\n\n-> Hệ thống sẽ tự động bật TINKER sau đúng 30 giây nữa!"
+        )
+        QTimer.singleShot(30000, run_second_app)
+
+    def auto_start_both_silent(self):
+        qt_path = self.txt_qt.text().strip()
+        tinker_path = self.txt_tinker.text().strip()
+
+        # 1. Bật QT trước
+        if qt_path and os.path.exists(qt_path) and not is_process_running_by_path(qt_path):
+            self.execute_binary(qt_path)
+            self.status_boot_label.setText("Đã bật QT. Đang đếm lùi 30 giây để bật TINKER...")
+        else:
+            self.status_boot_label.setText("QT đã hoạt động. Đang chờ 30 giây để kiểm tra TINKER...")
+
+        # 2. Chờ đúng 30 giây (30000ms) mới kích hoạt TINKER
+        def start_tinker():
+            if tinker_path and os.path.exists(tinker_path) and not is_process_running_by_path(tinker_path):
+                self.execute_binary(tinker_path)
+                self.status_boot_label.setText("Đã tự động khởi chạy TINKER sau 30 giây!")
+            self.check_app_status_ui()
+
+        QTimer.singleShot(30000, start_tinker)
+
+    def check_app_status_ui(self):
+        qt_running = is_process_running_by_path(self.txt_qt.text().strip())
+        if qt_running:
+            self.status_qt_badge.setText("🟢 ĐANG CHẠY (ONLINE)")
+            self.status_qt_badge.setStyleSheet("border: none; font-size: 11px; font-weight: bold; color: #00e676;")
+        else:
+            self.status_qt_badge.setText("🔴 ĐÃ DỪNG (OFFLINE)")
+            self.status_qt_badge.setStyleSheet("border: none; font-size: 11px; font-weight: bold; color: #ff5252;")
+
+        tinker_running = is_process_running_by_path(self.txt_tinker.text().strip())
+        if tinker_running:
+            self.status_tinker_badge.setText("🟢 ĐANG CHẠY (ONLINE)")
+            self.status_tinker_badge.setStyleSheet("border: none; font-size: 11px; font-weight: bold; color: #00e676;")
+        else:
+            self.status_tinker_badge.setText("🔴 ĐÃ DỪNG (OFFLINE)")
+            self.status_tinker_badge.setStyleSheet("border: none; font-size: 11px; font-weight: bold; color: #ff5252;")
+
+        return qt_running, tinker_running
+
+    def check_and_recover_apps(self):
+        qt_path = self.txt_qt.text().strip()
+        tinker_path = self.txt_tinker.text().strip()
+
+        qt_on, tinker_on = self.check_app_status_ui()
+
+        if not self.chk_auto_restart.isChecked():
+            return
+
+        if qt_path and os.path.exists(qt_path) and not qt_on:
+            self.status_boot_label.setText("Phát hiện QT bị tắt! Đang tự động bật lại...")
+            self.execute_binary(qt_path)
+
+        if tinker_path and os.path.exists(tinker_path) and not tinker_on:
+            self.status_boot_label.setText("Phát hiện TINKER bị tắt! Đang tự động bật lại...")
+            self.execute_binary(tinker_path)
+
+    # ================= KHỞI ĐỘNG CÙNG WINDOWS =================
+
+    def get_startup_shortcut_path(self):
+        startup_dir = os.path.join(os.environ["APPDATA"], r"Microsoft\Windows\Start Menu\Programs\Startup")
+        return os.path.join(startup_dir, "Mir4_Master_Hub.bat")
+
+    def is_startup_enabled(self):
+        if os.path.exists(self.get_startup_shortcut_path()):
+            return True
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_READ)
+            winreg.QueryValueEx(key, REG_APP_NAME)
+            winreg.CloseKey(key)
+            return True
+        except Exception:
+            return False
+
+    def toggle_startup(self, state):
+        exe_path = get_current_exe_path()
+        bat_file = self.get_startup_shortcut_path()
+        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+        if state == Qt.Checked:
+            try:
+                with open(bat_file, "w", encoding="utf-8") as f:
+                    f.write(f'@echo off\nstart "" "{exe_path}"\n')
+            except Exception:
+                pass
+
+            try:
+                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
+                winreg.SetValueEx(key, REG_APP_NAME, 0, winreg.REG_SZ, f'"{exe_path}"')
+                winreg.CloseKey(key)
+            except Exception:
+                pass
+
+            self.status_boot_label.setText("Đã kích hoạt tự khởi động Hub cùng Windows.")
+        else:
+            if os.path.exists(bat_file):
+                try:
+                    os.remove(bat_file)
+                except Exception:
+                    pass
+
+            try:
+                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
+                winreg.DeleteValue(key, REG_APP_NAME)
+                winreg.CloseKey(key)
+            except Exception:
+                pass
+
+            self.status_boot_label.setText("Đã tắt tự khởi động Hub cùng Windows.")
+
 
 if __name__ == "__main__":
-    try:
-        app = QApplication(sys.argv)
-        window = MasterApp()
-        window.show()
-        sys.exit(app.exec_())
-    except Exception as e:
-        show_fatal_error(f"Lỗi xảy ra trong Main App:\n{traceback.format_exc()}")
+    app = QApplication(sys.argv)
+    window = MasterApp()
+    window.show()
+    sys.exit(app.exec_())
